@@ -533,6 +533,7 @@ export class GlyphRenderer {
       ctx.strokeStyle = theme.stroke;
       ctx.lineWidth = 2.4;
       ctx.setLineDash([5, 5]);
+      ctx.lineDashOffset = -(performance.now() / 1000 * 15) % 10;
       ctx.stroke();
       ctx.setLineDash([]);
     }
