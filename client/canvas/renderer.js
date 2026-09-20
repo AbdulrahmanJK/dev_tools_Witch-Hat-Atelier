@@ -502,8 +502,8 @@ export class WorldRenderer {
         realisticLayout: node.realisticLayout ? { ...node.realisticLayout, realisticRadius: r } : null,
       };
 
-      // Pass isArt to renderNode: when true, renders purely as black & white draftsman art!
-      this.glyphRenderer.renderNode(ctx, drawNodeProxy, lod, isSelected, isHovered, isArt);
+      // Pass isArt and isLineageNode to renderNode
+      this.glyphRenderer.renderNode(ctx, drawNodeProxy, lod, isSelected, isHovered, isArt, isLineageNode);
       ctx.restore();
     }
   }
