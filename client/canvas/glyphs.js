@@ -10,22 +10,31 @@ export const WHA_THEMES = {
   Wind:   { stroke: '#1c7343', glow: 'rgba(28, 115, 67, 0.4)', bg: '#f2fbf5', label: '#0f4727' },
   Light:  { stroke: '#a88915', glow: 'rgba(168, 137, 21, 0.4)', bg: '#fffdf2', label: '#6e5f0b' },
   Arcane: { stroke: '#681da8', glow: 'rgba(104, 29, 168, 0.4)', bg: '#faf5ff', label: '#430f70' },
-  Ink:    { stroke: '#1c1b18', glow: 'rgba(28, 27, 24, 0.25)', bg: '#f4f1e3', label: '#1c1b18' },
+  Ink:    { stroke: '#141311', glow: 'rgba(20, 19, 17, 0.20)', bg: '#f6f3e5', label: '#141311' },
+  Mono:   { stroke: '#141311', glow: 'rgba(20, 19, 17, 0.15)', bg: '#faf8f0', label: '#141311' },
 };
 
 export class GlyphRenderer {
   constructor() {
-    this.inkColor = '#1a1916';
-    this.guideColor = 'rgba(26, 25, 22, 0.12)';
+    this.inkColor = '#141311';
+    this.guideColor = 'rgba(20, 19, 17, 0.14)';
   }
 
   // ═══════════ MAIN NODE RENDERER ═══════════
-  renderNode(ctx, node, lod, isSelected, isHovered, realisticMode = false) {
-    if (realisticMode && node.realisticLayout && node.realisticLayout.subSeals?.length > 0) {
+  renderNode(ctx, node, lod, isSelected, isHovered, artMode = false) {
+    // If in Art Blueprint Mode (черно-белый чертеж / картина без интерактива)
+    if (artMode) {
+      this.renderArtBlueprintSeal(ctx, node, lod);
+      return;
+    }
+
+    // By DEFAULT: render full complex nested compound seal!
+    if (node.realisticLayout && node.realisticLayout.subSeals?.length > 0) {
       this.renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered);
       return;
     }
 
+    // Fallback simple seal (if no sub-seals exist)
     const x = node.x;
     const y = node.y;
     const r = node.metrics.radius;
@@ -35,70 +44,385 @@ export class GlyphRenderer {
     ctx.save();
     ctx.translate(x, y);
 
-    // 1. LOD 0 (Distant zoom): Just glowing aura and minimal circular beacon
     if (lod === 0) {
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fillStyle = theme.stroke;
       ctx.globalAlpha = isHovered || isSelected ? 0.8 : 0.45;
       ctx.fill();
-
-      // Glowing aura
-      if (isSelected || isHovered) {
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 1.5, 0, Math.PI * 2);
-        ctx.strokeStyle = theme.stroke;
-        ctx.lineWidth = 4;
-        ctx.stroke();
-      }
       ctx.restore();
       return;
     }
 
-    // 2. Aura / Glow on selection or hover
     if (isSelected || isHovered) {
       ctx.beginPath();
       ctx.arc(0, 0, r + 14, 0, Math.PI * 2);
       ctx.fillStyle = theme.glow;
       ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
-      ctx.strokeStyle = theme.stroke;
-      ctx.lineWidth = 2.2;
-      ctx.setLineDash([4, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
-    // 3. Fill interior of seal with warm parchment and subtle elemental tint
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fillStyle = theme.bg || '#f7f4e8';
     ctx.fill();
 
-    // 4. Outer Seal Ring (The Activation Circuit)
     this.drawOuterRing(ctx, r, node, theme, lod);
-
-    // 5. Central Elemental Sigil (Fire, Water, Earth, Wind, Light, Arcane)
     this.drawSigil(ctx, 0, 0, r * 0.42, element, theme);
 
-    // 6. LOD 2: Hook Keystones on orbit
     if (lod >= 2 && node.metrics.keystones && node.metrics.keystones.length > 0) {
       this.drawKeystones(ctx, r, node.metrics.keystones, theme);
     }
 
-    // 7. Component Name & Meta
     this.drawLabels(ctx, r, node, lod, isSelected || isHovered);
+    ctx.restore();
+  }
 
-    // 8. Overcharged / Forbidden Signs
-    if (node.metrics.isForbidden) {
-      this.drawForbiddenMarks(ctx, r);
-    } else if (node.metrics.grade === 'Overcharged Monolith') {
-      this.drawOverchargedCracks(ctx, r);
+  // ═══════════ MONOCHROME ART BLUEPRINT MODE (ЧЕРНО-БЕЛЫЙ ЧЕРТЕЖ) ═══════════
+  renderArtBlueprintSeal(ctx, node, lod) {
+    const layout = node.realisticLayout || { realisticRadius: node.metrics.radius, subSeals: [], conduits: [] };
+    const r = layout.realisticRadius;
+    const ink = '#141311';
+
+    ctx.save();
+    ctx.translate(node.x, node.y);
+
+    if (lod === 0) {
+      // Distant ink beacon
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = ink;
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // Parchment base
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#f9f7ee';
+    ctx.fill();
+
+    // Delicate hand-drawn cross-hatching inside the outer band
+    if (lod >= 1) {
+      this.drawHatchingInRing(ctx, r - 14, r - 1, 4.5, 'rgba(20, 19, 17, 0.16)');
+    }
+
+    // Technical Blueprint Outer Rings (4 concentric circles with degree ticks)
+    this.drawArtBlueprintRings(ctx, r, lod);
+
+    // Conduits: Technical drafting ink lines with junction nodes
+    this.drawArtConduits(ctx, layout.subSeals, layout.conduits);
+
+    // Inscribed Sub-Seals in Pure Black Ink with architectural precision
+    if (layout.subSeals && layout.subSeals.length > 0) {
+      layout.subSeals.forEach((sub) => {
+        this.drawArtSubSeal(ctx, sub, lod);
+      });
+    } else {
+      // Draw classic sigil in black ink
+      this.drawSigil(ctx, 0, 0, r * 0.40, node.metrics.element, WHA_THEMES.Mono);
+    }
+
+    // Calligraphic Drafting Label
+    this.drawArtLabels(ctx, r, node, lod);
+
+    // Overcharged Monolith: intricate architectural fissures
+    if (node.metrics.grade === 'Overcharged Monolith') {
+      this.drawArtFissures(ctx, r);
     }
 
     ctx.restore();
+  }
+
+  // ═══════════ ART BLUEPRINT RINGS (ЧЕРТЕЖНЫЕ КОЛЬЦА) ═══════════
+  drawArtBlueprintRings(ctx, r, lod) {
+    const ink = '#141311';
+
+    // 1. Outermost fine compass caliper ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+
+    // 2. Second ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.75)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // 3. Third hatch boundary ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 14, 0, Math.PI * 2);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // 4. Inner dashed alignment ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 20, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([3, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 36 Degree Compass Ticks (every 10 degrees)
+    for (let i = 0; i < 36; i++) {
+      const a = (i * Math.PI * 2) / 36;
+      const isMajor = i % 9 === 0; // 0, 90, 180, 270
+      const isSemi = i % 3 === 0;
+      const len = isMajor ? 16 : isSemi ? 9 : 5;
+
+      ctx.beginPath();
+      ctx.moveTo((r - 1) * Math.cos(a), (r - 1) * Math.sin(a));
+      ctx.lineTo((r - len) * Math.cos(a), (r - len) * Math.sin(a));
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = isMajor ? 2.4 : isSemi ? 1.4 : 0.8;
+      ctx.stroke();
+
+      // Cardinal drafting crosses
+      if (isMajor && lod >= 2) {
+        const cx = (r + 14) * Math.cos(a);
+        const cy = (r + 14) * Math.sin(a);
+        ctx.beginPath();
+        ctx.moveTo(cx - 4, cy);
+        ctx.lineTo(cx + 4, cy);
+        ctx.moveTo(cx, cy - 4);
+        ctx.lineTo(cx, cy + 4);
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+    }
+
+    // Cardinal Spikes extending outward
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      ctx.beginPath();
+      ctx.moveTo((r - 2) * Math.cos(a), (r - 2) * Math.sin(a));
+      ctx.lineTo((r + 18) * Math.cos(a), (r + 18) * Math.sin(a));
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+    }
+  }
+
+  // ═══════════ HATCHING EFFECT (ШТРИХОВКА ТУШЬЮ) ═══════════
+  drawHatchingInRing(ctx, innerR, outerR, spacing = 5, color = 'rgba(20, 19, 17, 0.15)') {
+    ctx.save();
+    // Clip to the annular ring area
+    ctx.beginPath();
+    ctx.arc(0, 0, outerR, 0, Math.PI * 2, false);
+    ctx.arc(0, 0, innerR, 0, Math.PI * 2, true);
+    ctx.clip();
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    for (let x = -outerR; x <= outerR * 2; x += spacing) {
+      ctx.moveTo(x - outerR, -outerR);
+      ctx.lineTo(x, outerR);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ═══════════ TECHNICAL ART CONDUITS ═══════════
+  drawArtConduits(ctx, subSeals, conduits) {
+    if (!conduits || conduits.length === 0) return;
+    const subMap = new Map();
+    subSeals.forEach((s) => {
+      subMap.set(s.type, s);
+      subMap.set(s.id.split('#')[1], s);
+    });
+
+    conduits.forEach((c) => {
+      const s1 = subMap.get(c.from);
+      const s2 = subMap.get(c.to);
+      if (!s1 || !s2) return;
+
+      const dx = s2.dx - s1.dx;
+      const dy = s2.dy - s1.dy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 5) return;
+
+      const normalX = -dy / dist;
+      const normalY = dx / dist;
+      const curve = Math.min(22, dist * 0.16);
+      const mx = (s1.dx + s2.dx) / 2 + normalX * curve;
+      const my = (s1.dy + s2.dy) / 2 + normalY * curve;
+
+      // Drafting construction line
+      ctx.beginPath();
+      ctx.moveTo(s1.dx, s1.dy);
+      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      // Tangent tick mark at midpoint
+      ctx.beginPath();
+      ctx.moveTo(mx - normalX * 4, my - normalY * 4);
+      ctx.lineTo(mx + normalX * 4, my + normalY * 4);
+      ctx.strokeStyle = '#141311';
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+
+      // Terminal junction dots
+      ctx.beginPath();
+      ctx.arc(s1.dx, s1.dy, 2.2, 0, Math.PI * 2);
+      ctx.arc(s2.dx, s2.dy, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#141311';
+      ctx.fill();
+    });
+  }
+
+  // ═══════════ INSCRIBED ART SUB-SEAL (ЧЕРНО-БЕЛЫЙ ПОД-КРУГ) ═══════════
+  drawArtSubSeal(ctx, sub, lod) {
+    ctx.save();
+    ctx.translate(sub.dx, sub.dy);
+    const sr = sub.radius;
+    const ink = '#141311';
+
+    // Sub-seal background: crisp parchment white
+    ctx.beginPath();
+    ctx.arc(0, 0, sr, 0, Math.PI * 2);
+    ctx.fillStyle = '#fdfcf7';
+    ctx.fill();
+
+    // Double technical ring
+    ctx.beginPath();
+    ctx.arc(0, 0, sr, 0, Math.PI * 2);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 2.0;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, sr - 3.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.55)';
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+
+    // 4 Cardinal ticks
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      ctx.beginPath();
+      ctx.moveTo((sr - 1) * Math.cos(a), (sr - 1) * Math.sin(a));
+      ctx.lineTo((sr - 5) * Math.cos(a), (sr - 5) * Math.sin(a));
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+
+    // Micro-Sigil in Pure Black Ink
+    if (sub.type === 'core') {
+      this.drawSigil(ctx, 0, 0, sr * 0.65, sub.element, WHA_THEMES.Mono);
+    } else if (sub.type === 'state') {
+      const ds = sr * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(0, -ds);
+      ctx.lineTo(ds, 0);
+      ctx.lineTo(0, ds);
+      ctx.lineTo(-ds, 0);
+      ctx.closePath();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+      // Fine center crosshair
+      ctx.beginPath();
+      ctx.moveTo(-ds * 0.4, 0); ctx.lineTo(ds * 0.4, 0);
+      ctx.moveTo(0, -ds * 0.4); ctx.lineTo(0, ds * 0.4);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+    } else if (sub.type === 'effects') {
+      ctx.beginPath();
+      ctx.arc(0, 0, sr * 0.40, 0, Math.PI * 2);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = ink;
+      ctx.fill();
+    } else if (sub.type === 'handler') {
+      const ts = sr * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(0, -ts);
+      ctx.lineTo(0, ts * 0.8);
+      ctx.moveTo(-ts * 0.6, ts * 0.8);
+      ctx.lineTo(ts * 0.6, ts * 0.8);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    } else if (sub.type === 'child') {
+      const cs = sr * 0.38;
+      ctx.beginPath();
+      ctx.moveTo(-cs, cs * 0.6);
+      ctx.lineTo(0, -cs * 0.6);
+      ctx.lineTo(cs, cs * 0.6);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+
+    // Calligraphic technical sub-label
+    if (lod >= 1) {
+      ctx.textAlign = 'center';
+      const fSize = Math.max(8, Math.min(11, sr * 0.22));
+      ctx.font = `600 ${fSize}px 'Palatino Linotype', Palatino, serif`;
+      ctx.fillStyle = '#141311';
+      ctx.fillText(sub.name, 0, sr + 10);
+
+      if (lod >= 2 && sub.details && sub.details.length > 0) {
+        ctx.font = `italic 500 ${fSize * 0.88}px 'Palatino Linotype', Palatino, serif`;
+        ctx.fillStyle = 'rgba(20, 19, 17, 0.65)';
+        ctx.fillText(sub.details[0], 0, sr + 21);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  drawArtLabels(ctx, r, node, lod) {
+    ctx.textAlign = 'center';
+    const fontSize = Math.max(12, Math.min(18, r * 0.22));
+    ctx.font = `700 ${fontSize}px 'Palatino Linotype', 'Book Antiqua', Palatino, serif`;
+    ctx.fillStyle = '#141311';
+    ctx.fillText(node.name, 0, -r - 12);
+
+    if (lod >= 1) {
+      const subFont = Math.max(9, Math.min(13, r * 0.15));
+      ctx.font = `italic 600 ${subFont}px 'Palatino Linotype', Palatino, serif`;
+      ctx.fillStyle = 'rgba(20, 19, 17, 0.70)';
+      ctx.fillText(`${node.loc} LOC • ${node.metrics.grade}`, 0, r + 20);
+    }
+  }
+
+  drawArtFissures(ctx, r) {
+    ctx.strokeStyle = '#141311';
+    ctx.lineWidth = 1.8;
+    const angles = [0.35, 2.5, 4.7];
+    angles.forEach((ang) => {
+      const sx = Math.cos(ang) * (r + 4);
+      const sy = Math.sin(ang) * (r + 4);
+      const mx = Math.cos(ang) * (r * 0.85) + (Math.sin(ang) * 8);
+      const my = Math.sin(ang) * (r * 0.85) - (Math.cos(ang) * 8);
+      const ex = Math.cos(ang) * (r * 0.60);
+      const ey = Math.sin(ang) * (r * 0.60);
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(mx, my);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+    });
   }
 
   // ═══════════ REALISTIC COMPOUND NESTED SEAL RENDERER ═══════════

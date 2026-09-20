@@ -107,6 +107,8 @@ class GrimoireApp {
     });
 
     this.viewport.addEventListener('pointerup', (e) => {
+      if (this.realisticMode) return; // Interactivity disabled in Art Mode!
+
       const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
       if (moved < 5) {
         // Pure click (not drag pan)
@@ -122,20 +124,30 @@ class GrimoireApp {
 
     this.viewport.addEventListener('pointermove', (e) => {
       if (this.camera.isDragging) return;
+      if (this.realisticMode) {
+        this.viewport.style.cursor = 'grab';
+        this.renderer.hoveredNodeId = null;
+        return;
+      }
+
       const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
       const node = hit ? (hit.node || hit) : null;
       this.renderer.hoveredNodeId = node ? node.id : null;
       this.viewport.style.cursor = node ? 'pointer' : 'grab';
     });
 
-    // Realistic Mode Toggle
+    // Realistic Manga Art Mode Toggle
     const toggleRealBtn = document.getElementById('btn-toggle-realistic');
     if (toggleRealBtn) {
       toggleRealBtn.addEventListener('click', () => {
         this.realisticMode = !this.realisticMode;
         toggleRealBtn.classList.toggle('active', this.realisticMode);
+        document.body.classList.toggle('art-mode', this.realisticMode);
         this.renderer.setRealisticMode(this.realisticMode);
-        if (this.renderer.selectedNodeId) {
+
+        if (this.realisticMode) {
+          this.deselect(); // Close drawer and clear selection for clean art viewing
+        } else if (this.renderer.selectedNodeId) {
           const selNode = this.allNodes.find((n) => n.id === this.renderer.selectedNodeId);
           if (selNode) this.openInspector(selNode);
         }
