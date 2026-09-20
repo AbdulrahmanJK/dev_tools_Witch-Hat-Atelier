@@ -187,14 +187,37 @@ html, body {
 }
 
 #btn-toggle-realistic.active {
-  background: #b83a14;
-  color: #f4f1e3;
-  border-color: #b83a14;
-  box-shadow: 0 0 12px rgba(184, 58, 20, 0.35);
+  background: #141311;
+  color: #f5f2e6;
+  border-color: #141311;
+  box-shadow: 0 0 14px rgba(20, 19, 17, 0.40);
 }
 
 #btn-toggle-realistic.active .mode-icon {
   animation: spin 8s linear infinite;
+}
+
+body.art-mode {
+  background: #f5f2e6;
+}
+
+body.art-mode #grimoire-header {
+  background: rgba(245, 242, 230, 0.92);
+  border-bottom: 1px solid rgba(20, 19, 17, 0.22);
+}
+
+body.art-mode #inspector-drawer {
+  transform: translateX(100%) !important;
+  pointer-events: none !important;
+}
+
+body.art-mode .filter-pills {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+body.art-mode .search-box {
+  opacity: 0.6;
 }
 
 @keyframes spin {
