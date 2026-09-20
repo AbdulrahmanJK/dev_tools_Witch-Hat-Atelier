@@ -114,50 +114,53 @@ export class GlyphRenderer {
     ctx.save();
     ctx.translate(node.x, node.y);
 
-    if (lod === 0) {
-      // Distant ink beacon
+    if (lod === 0 && r < 40) {
+      // Tiny leaf circle at distant zoom: simple delicate ring with central dot
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 2.4;
+      ctx.lineWidth = 1.0;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
+      ctx.arc(0, 0, 2, 0, Math.PI * 2);
       ctx.fillStyle = ink;
       ctx.fill();
       ctx.restore();
       return;
     }
 
-    // Pure antique drawing paper base
+    // Translucent antique drawing paper base so overlapping intersecting rings show their crossing arcs
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#fbf9f2';
+    ctx.fillStyle = 'rgba(251, 249, 242, 0.72)';
     ctx.fill();
 
-    // 1. Confident Outer Hand-Drawn Ink Ring (exactly matching user image)
+    // 1. Delicate, fine hand-drawn ink ring (fine quill thickness: 1.0 - 2.0px)
+    const ringWidth = r > 250 ? 2.2 : r > 80 ? 1.4 : 1.0;
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 3.6;
+    ctx.lineWidth = ringWidth;
     ctx.stroke();
 
     // Guideline circle for keystone orbit
     ctx.beginPath();
     ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
-    ctx.lineWidth = 1.0;
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
+    ctx.lineWidth = 0.7;
     ctx.stroke();
 
-    // 2. Canonical Radial Keystone Crown (16 alternating convergence triangles & levitation arrows)
-    this.drawRadialKeystoneCrown(ctx, r * 0.74, 16, ink);
+    // 2. Canonical Radial Keystone Crown (only on large circles or when zoomed in)
+    if (r >= 65 || lod >= 2) {
+      this.drawRadialKeystoneCrown(ctx, r * 0.76, r > 140 ? 16 : 8, ink);
 
-    // Inner ring enclosing the center core
-    ctx.beginPath();
-    ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
+      // Inner ring enclosing the center core
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+    }
 
     // 3. Central Canonical Sigil or Inscribed Sub-Seals
     if (layout.subSeals && layout.subSeals.length > 2 && lod >= 2) {
@@ -169,10 +172,10 @@ export class GlyphRenderer {
       });
     } else {
       // Center: exact canonical vector sigil
-      const sigilSize = r * 0.48;
+      const sigilSize = Math.max(12, r * 0.44);
       ctx.strokeStyle = ink;
       ctx.fillStyle = ink;
-      ctx.lineWidth = 2.4;
+      ctx.lineWidth = r > 100 ? 1.8 : 1.1;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -192,13 +195,8 @@ export class GlyphRenderer {
       }
     }
 
-    // Calligraphic Drafting Label
+    // Calligraphic Drafting Label (with intelligent LOD collision suppression)
     this.drawArtLabels(ctx, r, node, lod);
-
-    // Overcharged Monolith: delicate architectural fissures
-    if (node.metrics.grade === 'Overcharged Monolith') {
-      this.drawArtFissures(ctx, r);
-    }
 
     ctx.restore();
   }
@@ -455,17 +453,22 @@ export class GlyphRenderer {
   }
 
   drawArtLabels(ctx, r, node, lod) {
-    ctx.textAlign = 'center';
-    const fontSize = Math.max(12, Math.min(18, r * 0.22));
-    ctx.font = `700 ${fontSize}px 'Palatino Linotype', 'Book Antiqua', Palatino, serif`;
-    ctx.fillStyle = '#141311';
-    ctx.fillText(node.name, 0, -r - 12);
+    // Intelligent clutter suppression: only show label if circle is large enough at current zoom!
+    if (lod === 0 && r < 75) return;
+    if (lod === 1 && r < 35) return;
 
-    if (lod >= 1) {
-      const subFont = Math.max(9, Math.min(13, r * 0.15));
-      ctx.font = `italic 600 ${subFont}px 'Palatino Linotype', Palatino, serif`;
-      ctx.fillStyle = 'rgba(20, 19, 17, 0.70)';
-      ctx.fillText(`${node.loc} LOC • ${node.metrics.grade}`, 0, r + 20);
+    ctx.textAlign = 'center';
+    const fontSize = Math.max(9, Math.min(15, r * 0.18));
+    ctx.font = `600 ${fontSize}px 'Palatino Linotype', 'Book Antiqua', Georgia, serif`;
+    ctx.fillStyle = '#141311';
+    ctx.fillText(node.name, 0, -r - 7);
+
+    // Only show LOC subtitle on major circles or close zoom
+    if ((lod >= 1 && r >= 75) || lod >= 2) {
+      const subFont = Math.max(8, Math.min(12, r * 0.14));
+      ctx.font = `italic 500 ${subFont}px 'Palatino Linotype', Palatino, serif`;
+      ctx.fillStyle = 'rgba(20, 19, 17, 0.65)';
+      ctx.fillText(`${node.loc} LOC`, 0, r + 16);
     }
   }
 
