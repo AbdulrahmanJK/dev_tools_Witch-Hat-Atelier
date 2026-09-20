@@ -3,6 +3,13 @@
    Authentic Victorian-Manga Parchment Aesthetics
    ═══════════════════════════════════════════════════════════════════ */
 
+@font-face {
+  font-family: 'WhaTitle';
+  src: url('assets/wha-title.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

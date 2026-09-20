@@ -3,6 +3,34 @@
 // Authentic vector rendering of WHA Seals, Sigils, and Keystones
 // ═══════════════════════════════════════════════════════════════════
 
+import { CANONICAL_GLYPHS } from './whaPaths.js';
+
+// Cache of parsed Path2D objects for peak 120 FPS performance
+const PATH_CACHE = new Map();
+
+export function getCanonicalPath(name) {
+  if (PATH_CACHE.has(name)) return PATH_CACHE.get(name);
+  const data = CANONICAL_GLYPHS[name];
+  if (!data) return null;
+  const path = new Path2D(data.d);
+  const item = { path, w: data.w, h: data.h };
+  PATH_CACHE.set(name, item);
+  return item;
+}
+
+export function drawCanonicalGlyph(ctx, name, size) {
+  const item = getCanonicalPath(name);
+  if (!item) return false;
+  ctx.save();
+  const maxDim = Math.max(item.w, item.h);
+  const s = size / maxDim;
+  ctx.scale(s, s);
+  ctx.translate(-item.w / 2, -item.h / 2);
+  ctx.stroke(item.path);
+  ctx.restore();
+  return true;
+}
+
 export const WHA_THEMES = {
   Fire:   { stroke: '#b83a14', glow: 'rgba(184, 58, 20, 0.45)', bg: '#fbf4eb', label: '#8a2207' },
   Water:  { stroke: '#106ba3', glow: 'rgba(16, 107, 163, 0.4)', bg: '#f0f6fa', label: '#0a466b' },
@@ -77,7 +105,7 @@ export class GlyphRenderer {
     ctx.restore();
   }
 
-  // ═══════════ MONOCHROME ART BLUEPRINT MODE (ЧЕРНО-БЕЛЫЙ ЧЕРТЕЖ) ═══════════
+  // ═══════════ MONOCHROME ART BLUEPRINT MODE (ЧЕРНО-БЕЛЫЙ ЧЕРТЕЖ КАК НА КАРТИНКЕ) ═══════════
   renderArtBlueprintSeal(ctx, node, lod) {
     const layout = node.realisticLayout || { realisticRadius: node.metrics.radius, subSeals: [], conduits: [] };
     const r = layout.realisticRadius;
@@ -91,47 +119,83 @@ export class GlyphRenderer {
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 2.0;
+      ctx.lineWidth = 2.4;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+      ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
       ctx.fillStyle = ink;
       ctx.fill();
       ctx.restore();
       return;
     }
 
-    // Parchment base
+    // Pure antique drawing paper base
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#f9f7ee';
+    ctx.fillStyle = '#fbf9f2';
     ctx.fill();
 
-    // Delicate hand-drawn cross-hatching inside the outer band
-    if (lod >= 1) {
-      this.drawHatchingInRing(ctx, r - 14, r - 1, 4.5, 'rgba(20, 19, 17, 0.16)');
-    }
+    // 1. Confident Outer Hand-Drawn Ink Ring (exactly matching user image)
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 3.6;
+    ctx.stroke();
 
-    // Technical Blueprint Outer Rings (4 concentric circles with degree ticks)
-    this.drawArtBlueprintRings(ctx, r, lod);
+    // Guideline circle for keystone orbit
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
 
-    // Conduits: Technical drafting ink lines with junction nodes
-    this.drawArtConduits(ctx, layout.subSeals, layout.conduits);
+    // 2. Canonical Radial Keystone Crown (16 alternating convergence triangles & levitation arrows)
+    this.drawRadialKeystoneCrown(ctx, r * 0.74, 16, ink);
 
-    // Inscribed Sub-Seals in Pure Black Ink with architectural precision
-    if (layout.subSeals && layout.subSeals.length > 0) {
+    // Inner ring enclosing the center core
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // 3. Central Canonical Sigil or Inscribed Sub-Seals
+    if (layout.subSeals && layout.subSeals.length > 2 && lod >= 2) {
+      // Conduits
+      this.drawArtConduits(ctx, layout.subSeals, layout.conduits);
+      // Inscribed Sub-Seals
       layout.subSeals.forEach((sub) => {
         this.drawArtSubSeal(ctx, sub, lod);
       });
     } else {
-      // Draw classic sigil in black ink
-      this.drawSigil(ctx, 0, 0, r * 0.40, node.metrics.element, WHA_THEMES.Mono);
+      // Center: exact canonical vector sigil
+      const sigilSize = r * 0.48;
+      ctx.strokeStyle = ink;
+      ctx.fillStyle = ink;
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      const el = node.metrics.element;
+      if (el === 'Wind' || node.name === 'App') {
+        drawCanonicalGlyph(ctx, 'wind-underfoot', sigilSize);
+      } else if (el === 'Fire') {
+        drawCanonicalGlyph(ctx, 'fire', sigilSize);
+      } else if (el === 'Water') {
+        drawCanonicalGlyph(ctx, 'water', sigilSize);
+      } else if (el === 'Earth') {
+        drawCanonicalGlyph(ctx, 'earth', sigilSize);
+      } else if (el === 'Light') {
+        drawCanonicalGlyph(ctx, 'light', sigilSize);
+      } else {
+        drawCanonicalGlyph(ctx, 'wind-underfoot', sigilSize);
+      }
     }
 
     // Calligraphic Drafting Label
     this.drawArtLabels(ctx, r, node, lod);
 
-    // Overcharged Monolith: intricate architectural fissures
+    // Overcharged Monolith: delicate architectural fissures
     if (node.metrics.grade === 'Overcharged Monolith') {
       this.drawArtFissures(ctx, r);
     }
@@ -470,10 +534,15 @@ export class GlyphRenderer {
     // 1. Triple Compound Gear-Toothed Outer Ring
     this.drawCompoundGearRing(ctx, r, theme, lod);
 
-    // 2. Internal Conduits (Energy Pathways between sub-seals)
+    // 2. Canonical Radial Keystone Crown (matching user's image)
+    if (lod >= 1) {
+      this.drawRadialKeystoneCrown(ctx, r * 0.82, 16, 'rgba(26, 25, 22, 0.75)');
+    }
+
+    // 3. Internal Conduits (Energy Pathways between sub-seals)
     this.drawInternalConduits(ctx, layout.subSeals, layout.conduits, theme);
 
-    // 3. Render Each Inscribed Sub-Seal
+    // 4. Render Each Inscribed Sub-Seal
     layout.subSeals.forEach((sub) => {
       this.drawSubSeal(ctx, sub, lod, theme);
     });
@@ -754,172 +823,67 @@ export class GlyphRenderer {
     }
   }
 
+  // ═══════════ CANONICAL RADIAL KEYSTONE CROWN (ПОЯС ЗНАКОВ КАК НА КАРТИНКЕ) ═══════════
+  drawRadialKeystoneCrown(ctx, orbitR, count = 16, strokeColor = '#141311') {
+    const step = (Math.PI * 2) / count;
+    const keystoneSize = Math.max(10, orbitR * 0.20);
+
+    ctx.save();
+    ctx.strokeStyle = strokeColor;
+    ctx.fillStyle = strokeColor;
+    ctx.lineWidth = 2.0;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (let i = 0; i < count; i++) {
+      const a = i * step;
+      const kx = Math.cos(a) * orbitR;
+      const ky = Math.sin(a) * orbitR;
+
+      ctx.save();
+      ctx.translate(kx, ky);
+      // Rotate radially along the circle
+      ctx.rotate(a + Math.PI / 2);
+
+      const isEven = i % 2 === 0;
+      if (isEven) {
+        // Triangle pointing inward toward center (Convergence) - exactly as in user image
+        drawCanonicalGlyph(ctx, 'convergence', keystoneSize);
+      } else {
+        // Arrow pointing outward with base tick (Levitation) - exactly as in user image
+        drawCanonicalGlyph(ctx, 'levitation', keystoneSize);
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
   // ═══════════ CANONICAL SIGILS (WHA CODES) ═══════════
   drawSigil(ctx, cx, cy, sz, element, theme) {
     ctx.save();
     ctx.translate(cx, cy);
     ctx.strokeStyle = theme.stroke;
     ctx.fillStyle = theme.stroke;
-    ctx.lineWidth = 2.8;
+    ctx.lineWidth = 2.4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    switch (element) {
-      case 'Fire':
-        // Equilateral triangle apex up + vertical bisector extending below base as stem
-        {
-          const h = sz * 1.2;
-          const w = sz * 1.0;
-          const apexY = -h * 0.55;
-          const baseY = h * 0.15;
-          const stemY = baseY + h * 0.42;
+    const elName = (element || '').toLowerCase();
 
-          // Triangle
-          ctx.beginPath();
-          ctx.moveTo(0, apexY);
-          ctx.lineTo(-w / 2, baseY);
-          ctx.lineTo(w / 2, baseY);
-          ctx.closePath();
-          ctx.stroke();
-
-          // Bisector & stem
-          ctx.beginPath();
-          ctx.moveTo(0, apexY);
-          ctx.lineTo(0, stemY);
-          ctx.stroke();
-
-          // Cross tick at bottom of stem
-          ctx.beginPath();
-          ctx.moveTo(-w * 0.22, stemY);
-          ctx.lineTo(w * 0.22, stemY);
-          ctx.stroke();
-        }
-        break;
-
-      case 'Water':
-        // Sinuous vertical spine + alternating horizontal branch stubs (fish skeleton)
-        {
-          const h = sz * 1.2;
-          const half = h / 2;
-          ctx.beginPath();
-          ctx.moveTo(0, -half);
-          ctx.bezierCurveTo(-sz * 0.25, -half * 0.4, sz * 0.25, half * 0.4, 0, half);
-          ctx.stroke();
-
-          // Branches
-          const branches = [-half * 0.5, -half * 0.15, half * 0.2, half * 0.55];
-          branches.forEach((by, idx) => {
-            const dir = idx % 2 === 0 ? 1 : -1;
-            const len = sz * 0.4;
-            ctx.beginPath();
-            ctx.moveTo(0, by);
-            ctx.lineTo(dir * len, by - dir * 2);
-            ctx.stroke();
-          });
-        }
-        break;
-
-      case 'Earth':
-        // Downward triangle + internal crossbar in upper third + lateral dots
-        {
-          const h = sz * 1.1;
-          const w = sz * 1.0;
-          const baseY = -h * 0.4;
-          const apexY = h * 0.45;
-          const barY = baseY + h * 0.28;
-
-          // Triangle pointing down
-          ctx.beginPath();
-          ctx.moveTo(-w / 2, baseY);
-          ctx.lineTo(w / 2, baseY);
-          ctx.lineTo(0, apexY);
-          ctx.closePath();
-          ctx.stroke();
-
-          // Crossbar extending beyond sides
-          ctx.beginPath();
-          ctx.moveTo(-w * 0.65, barY);
-          ctx.lineTo(w * 0.65, barY);
-          ctx.stroke();
-
-          // Lateral dots
-          ctx.beginPath();
-          ctx.arc(-w * 0.6, 0, 2.2, 0, Math.PI * 2);
-          ctx.arc(w * 0.6, 0, 2.2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        break;
-
-      case 'Wind':
-        // S-curve spine + 2 outward-pointing chevrons
-        {
-          const half = sz * 0.55;
-          ctx.beginPath();
-          ctx.moveTo(-half * 0.6, -half);
-          ctx.bezierCurveTo(half * 0.8, -half * 0.5, -half * 0.8, half * 0.5, half * 0.6, half);
-          ctx.stroke();
-
-          // Chevron left (pointing outward-left)
-          ctx.beginPath();
-          ctx.moveTo(-half * 0.2, -half * 0.3);
-          ctx.lineTo(-half * 0.8, -half * 0.1);
-          ctx.lineTo(-half * 0.2, half * 0.1);
-          ctx.stroke();
-
-          // Chevron right (pointing outward-right)
-          ctx.beginPath();
-          ctx.moveTo(half * 0.2, -half * 0.1);
-          ctx.lineTo(half * 0.8, half * 0.1);
-          ctx.lineTo(half * 0.2, half * 0.3);
-          ctx.stroke();
-        }
-        break;
-
-      case 'Light':
-        // Diamond outline (rotated 45deg) + 8 radiating spokes
-        {
-          const rD = sz * 0.42;
-          ctx.beginPath();
-          ctx.moveTo(0, -rD);
-          ctx.lineTo(rD, 0);
-          ctx.lineTo(0, rD);
-          ctx.lineTo(-rD, 0);
-          ctx.closePath();
-          ctx.stroke();
-
-          // 8 Spokes extending through vertices & edges
-          const spokeLen = rD * 1.55;
-          for (let i = 0; i < 8; i++) {
-            const a = (i * Math.PI) / 4;
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(Math.cos(a) * spokeLen, Math.sin(a) * spokeLen);
-            ctx.stroke();
-          }
-        }
-        break;
-
-      case 'Arcane':
-      default:
-        // Compound Core: Nested concentric ring with eye & 4 star rays
-        {
-          ctx.beginPath();
-          ctx.arc(0, 0, sz * 0.45, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.beginPath();
-          ctx.arc(0, 0, sz * 0.18, 0, Math.PI * 2);
-          ctx.fill();
-
-          for (let i = 0; i < 4; i++) {
-            const a = (i * Math.PI) / 2 + Math.PI / 4;
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(a) * sz * 0.25, Math.sin(a) * sz * 0.25);
-            ctx.lineTo(Math.cos(a) * sz * 0.72, Math.sin(a) * sz * 0.72);
-            ctx.stroke();
-          }
-        }
-        break;
+    if (elName.includes('wind') || elName.includes('air')) {
+      // Exact canonical Wind Underfoot double-volute nautilus
+      drawCanonicalGlyph(ctx, 'wind-underfoot', sz * 1.35);
+    } else if (elName.includes('fire')) {
+      drawCanonicalGlyph(ctx, 'fire', sz * 1.35);
+    } else if (elName.includes('water')) {
+      drawCanonicalGlyph(ctx, 'water', sz * 1.35);
+    } else if (elName.includes('earth')) {
+      drawCanonicalGlyph(ctx, 'earth', sz * 1.35);
+    } else if (elName.includes('light')) {
+      drawCanonicalGlyph(ctx, 'light', sz * 1.35);
+    } else {
+      // Arcane / Compound core
+      drawCanonicalGlyph(ctx, 'wind-underfoot', sz * 1.35);
     }
 
     ctx.restore();
