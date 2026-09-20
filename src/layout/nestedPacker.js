@@ -12,41 +12,33 @@ export class NestedPacker {
 
     const hasInternalCircuit = stateVars.length > 0 || effects.length > 0 || handlers.length > 0 || children.length > 0;
 
-    // Base sub-seal unit size (scaled moderately with LOC)
-    const unitR = Math.max(16, Math.min(28, 14 + Math.log2(Math.max(1, node.loc)) * 1.8));
-
-    // 1. Center: Core Elemental Sigil Sub-Seal
-    const coreR = Math.round(unitR * 1.15);
+    // 1. Center: Core Elemental Sigil Sub-Seal (always at origin with 0.18 radius ratio)
     subSeals.push({
       id: `${node.id}#core`,
       type: 'core',
       name: node.metrics.element,
       element: node.metrics.element,
-      dx: 0,
-      dy: 0,
-      radius: coreR,
+      angle: 0,
+      distRatio: 0,
+      radiusRatio: 0.18,
       details: ['Elemental Core'],
     });
 
     if (hasInternalCircuit) {
-      const chamberOrbit = Math.round(unitR * 2.2);
+      const chamberOrbitRatio = 0.40;
+      const subRadiusRatio = 0.14;
 
       // 2. West Quadrant: State Orbit Sub-Seal (useState / useReducer)
       if (stateVars.length > 0 || node.hooks.some((h) => h.name === 'useState')) {
-        const stateR = Math.round(unitR * 1.05);
-        const angle = Math.PI * 0.95; // West
-        const dx = Math.round(Math.cos(angle) * chamberOrbit);
-        const dy = Math.round(Math.sin(angle) * chamberOrbit);
-
         subSeals.push({
           id: `${node.id}#state`,
           type: 'state',
           name: 'State Orbit',
           element: 'Light',
           keystone: 'Diamond',
-          dx,
-          dy,
-          radius: stateR,
+          angle: Math.PI * 0.95, // West
+          distRatio: chamberOrbitRatio,
+          radiusRatio: subRadiusRatio,
           count: stateVars.length || 1,
           details: stateVars.map((v) => v.name).slice(0, 5),
         });
@@ -56,11 +48,6 @@ export class NestedPacker {
 
       // 3. East Quadrant: Lifecycle & Effects Chamber (useEffect)
       if (effects.length > 0 || node.hooks.some((h) => h.name === 'useEffect')) {
-        const effectR = Math.round(unitR * 1.05);
-        const angle = -Math.PI * 0.05; // East
-        const dx = Math.round(Math.cos(angle) * chamberOrbit);
-        const dy = Math.round(Math.sin(angle) * chamberOrbit);
-
         const depSummary = effects
           .flatMap((e) => e.deps)
           .filter(Boolean)
@@ -72,9 +59,9 @@ export class NestedPacker {
           name: 'Lifecycle Chamber',
           element: 'Water',
           keystone: 'Repetition',
-          dx,
-          dy,
-          radius: effectR,
+          angle: -Math.PI * 0.05, // East
+          distRatio: chamberOrbitRatio,
+          radiusRatio: subRadiusRatio,
           count: effects.length || 1,
           details: depSummary.length > 0 ? depSummary : ['Auto-trigger'],
         });
@@ -94,20 +81,17 @@ export class NestedPacker {
         topHandlers.forEach((h, idx) => {
           const step = topHandlers.length > 1 ? (endAngle - startAngle) / (topHandlers.length - 1) : 0;
           const angle = topHandlers.length === 1 ? Math.PI * 0.5 : startAngle + idx * step;
-          const fnR = Math.round(unitR * 0.9);
-          const dx = Math.round(Math.cos(angle) * chamberOrbit);
-          const dy = Math.round(Math.sin(angle) * chamberOrbit);
-
           const subId = `fn-${h.name}`;
+
           subSeals.push({
             id: `${node.id}#${subId}`,
             type: 'handler',
             name: h.name,
             element: 'Fire',
             keystone: 'Column',
-            dx,
-            dy,
-            radius: fnR,
+            angle,
+            distRatio: chamberOrbitRatio,
+            radiusRatio: subRadiusRatio * 0.9,
             loc: h.loc,
             details: [`${h.loc} LOC`],
           });
@@ -126,20 +110,17 @@ export class NestedPacker {
 
         topChildren.forEach((ch, idx) => {
           const angle = angles[idx];
-          const chR = Math.round(unitR * 0.9);
-          const dx = Math.round(Math.cos(angle) * chamberOrbit);
-          const dy = Math.round(Math.sin(angle) * chamberOrbit);
-
           const subId = `child-${ch}`;
+
           subSeals.push({
             id: `${node.id}#${subId}`,
             type: 'child',
             name: ch,
             element: 'Wind',
             keystone: 'Direction',
-            dx,
-            dy,
-            radius: chR,
+            angle,
+            distRatio: chamberOrbitRatio,
+            radiusRatio: subRadiusRatio * 0.9,
             details: ['JSX Child'],
           });
 
@@ -148,27 +129,18 @@ export class NestedPacker {
       }
     }
 
-    // 6. Compute Exact Three-Layer WHA Annular Zoning (Collision-Free Guarantee)
-    let maxSubExtent = coreR;
+    // Materialize pixel offsets based on baseRadius for backwards compatibility
     subSeals.forEach((s) => {
-      const ext = Math.hypot(s.dx, s.dy) + s.radius;
-      if (ext > maxSubExtent) maxSubExtent = ext;
+      const d = baseRadius * s.distRatio;
+      s.dx = Math.round(Math.cos(s.angle) * d);
+      s.dy = Math.round(Math.sin(s.angle) * d);
+      s.radius = Math.max(6, Math.round(baseRadius * s.radiusRatio));
     });
 
-    // Layer 1: Inner Chamber boundary enclosing all sub-seals with clearance
-    const chamberRadius = Math.round(maxSubExtent + 14);
-
-    // Layer 2: Dedicated Keystone Crown Corridor for code signs (.map, .filter, Array, loops)
-    const keystoneRadius = Math.round(chamberRadius + 22);
-
-    // Layer 3: Outer Closing Boundary Ring
-    const R_outer = Math.round(keystoneRadius + 20);
-    const realisticRadius = Math.max(Math.round(baseRadius * 1.25), R_outer);
+    const realisticRadius = Math.round(baseRadius * 1.25);
 
     return {
       realisticRadius,
-      chamberRadius,
-      keystoneRadius,
       subSeals,
       conduits,
     };
