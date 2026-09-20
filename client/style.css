@@ -262,6 +262,109 @@ body.art-mode .search-box {
   line-height: 1.4;
 }
 
+/* ═══════════ ANCESTRY LINEAGE BREADCRUMBS ═══════════ */
+.lineage-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+}
+
+.crumb-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.73rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid var(--border-line);
+  background: #ffffff;
+  color: var(--ink-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.crumb-step:hover {
+  border-color: var(--ink-primary);
+  background: #fdfbf5;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.crumb-step.current {
+  border-color: #b83a14;
+  background: rgba(184, 58, 20, 0.08);
+  color: #8a2207;
+  font-weight: 700;
+  cursor: default;
+}
+
+.crumb-arrow {
+  font-size: 0.70rem;
+  color: var(--ink-secondary);
+  user-select: none;
+  opacity: 0.65;
+}
+
+/* ═══════════ DESCENDANT TRANSITION TREE ═══════════ */
+.descendant-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tree-branch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.65);
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tree-branch:hover {
+  background: var(--ink-primary);
+  color: var(--bg-parchment);
+  border-color: var(--ink-primary);
+}
+
+.tree-branch-name {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.tree-indent-guide {
+  display: inline-block;
+  color: var(--ink-secondary);
+  opacity: 0.65;
+  font-family: monospace;
+}
+
+.tree-branch:hover .tree-indent-guide {
+  color: #e5e0cf;
+}
+
+.tree-meta-badge {
+  font-size: 0.66rem;
+  color: var(--ink-secondary);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.tree-branch:hover .tree-meta-badge {
+  color: #e5e0cf;
+}
+
 /* ═══════════ CANVAS VIEWPORT ═══════════ */
 #viewport-container {
   position: relative;
