@@ -6,9 +6,9 @@ export function calculateComponentMetrics(component, fileInfo) {
   const antiPatterns = fileInfo.antiPatterns || [];
 
   // 1. Calculate Radius (Logarithmic scaling so large components don't obliterate the canvas)
-  // Range: 50px for small components to 170px for giant monoliths
+  // Clean, elegant range: 32px for small components to 88px for giant monoliths
   const logFactor = Math.log2(Math.max(1, loc));
-  const radius = Math.round(42 + Math.min(130, logFactor * 13));
+  const radius = Math.round(28 + Math.min(60, logFactor * 5.8));
 
   // 2. Map Hooks to WHA Keystones
   const keystones = new Set();
@@ -152,7 +152,7 @@ export function calculateComponentMetrics(component, fileInfo) {
 export function calculateNonComponentMetrics(fileInfo, category) {
   const loc = fileInfo.loc || 1;
   const logFactor = Math.log2(Math.max(1, loc));
-  const radius = Math.round(34 + Math.min(60, logFactor * 9));
+  const radius = Math.round(24 + Math.min(45, logFactor * 4.2));
 
   let element = 'Earth';
   if (category === 'api') element = 'Water';

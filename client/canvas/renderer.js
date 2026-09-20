@@ -325,7 +325,7 @@ export class WorldRenderer {
     const isArt = this.realisticMode;
     this.pulseOffset = (this.pulseOffset + 0.35) % 20;
 
-    const activeNodeId = isArt ? null : (this.hoveredNodeId || this.selectedNodeId);
+    const activeNodeId = isArt ? null : (this.selectedNodeId || this.hoveredNodeId);
     const connectedNodeIds = new Set();
     if (activeNodeId) {
       connectedNodeIds.add(activeNodeId);
@@ -436,7 +436,7 @@ export class WorldRenderer {
 
   drawNodes(ctx, vp, lod) {
     const isArt = this.realisticMode;
-    const activeNodeId = isArt ? null : (this.hoveredNodeId || this.selectedNodeId);
+    const activeNodeId = isArt ? null : (this.selectedNodeId || this.hoveredNodeId);
     const connectedNodeIds = new Set();
     if (activeNodeId) {
       connectedNodeIds.add(activeNodeId);
@@ -461,7 +461,7 @@ export class WorldRenderer {
       }
 
       const isSelected = !isArt && node.id === this.selectedNodeId;
-      const isHovered = !isArt && node.id === this.hoveredNodeId;
+      const isHovered = !isArt && !this.selectedNodeId && node.id === this.hoveredNodeId;
       const isLineageNode = !isArt && this.lineageNodeIds && this.lineageNodeIds.has(node.id);
       const isDimmed = activeNodeId && !connectedNodeIds.has(node.id) && !isLineageNode;
 

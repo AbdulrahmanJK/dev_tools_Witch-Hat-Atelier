@@ -117,15 +117,15 @@ export class ClusterLayout {
       });
     };
 
-    // 2. Ring 1: Provinces (Pages) at Radius ~1300
-    placeRing(pageClusters, 1350, 0);
+    // 2. Ring 1: Provinces (Pages) at Radius ~1750
+    placeRing(pageClusters, 1750, 0);
 
-    // 3. Ring 2: Ateliers (UI Components) at Radius ~2500
-    placeRing(atelierClusters, 2450, Math.PI / (atelierClusters.length || 1));
+    // 3. Ring 2: Ateliers (UI Components) at Radius ~2950
+    placeRing(atelierClusters, 2950, Math.PI / (atelierClusters.length || 1));
 
-    // 4. Ring 3: Power Veins, APIs, Constants at Radius ~3500
+    // 4. Ring 3: Power Veins, APIs, Constants at Radius ~4150
     const outerGroup = [...powerClusters, ...otherClusters];
-    placeRing(outerGroup, 3450, 0.4);
+    placeRing(outerGroup, 4150, 0.4);
 
     return centers;
   }
@@ -134,9 +134,10 @@ export class ClusterLayout {
     // Sort nodes within cluster: largest (most LOC / central) first
     const sorted = [...nodes].sort((a, b) => b.metrics.radius - a.metrics.radius);
 
-    // Initial spiral placement
+    // Initial spiral placement with compact Fermat spiral
     const placed = [];
-    const phi = (1 + Math.sqrt(5)) / 2; // Golden ratio
+    const avgR = sorted.reduce((s, n) => s + n.metrics.radius, 0) / (sorted.length || 1);
+    const stepDist = avgR * 1.15 + this.padding;
 
     sorted.forEach((node, idx) => {
       if (idx === 0) {
@@ -147,8 +148,7 @@ export class ClusterLayout {
         });
       } else {
         const theta = idx * 2.39996; // Golden angle in radians
-        // Distance increases with square root of index and node sizes
-        const dist = Math.sqrt(idx) * (node.metrics.radius * 2.1 + this.padding);
+        const dist = Math.sqrt(idx) * stepDist;
         placed.push({
           ...node,
           x: center.x + Math.cos(theta) * dist,

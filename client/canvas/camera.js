@@ -12,11 +12,13 @@ export class Camera {
 
     // Inertia & drag state
     this.isDragging = false;
+    this.hasMoved = false;
     this.dragStart = { x: 0, y: 0 };
     this.cameraStart = { x: 0, y: 0 };
     this.animating = false;
 
     this.onUpdate = null;
+    this.onClick = null;
     this.bindEvents();
   }
 
@@ -150,8 +152,8 @@ export class Camera {
     );
 
     el.addEventListener('pointerdown', (e) => {
-      // Allow drag on middle button, space+left, or normal drag if not clicking a node
       this.isDragging = true;
+      this.hasMoved = false;
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.cameraStart = { x: this.x, y: this.y };
       el.setPointerCapture(e.pointerId);
@@ -161,16 +163,41 @@ export class Camera {
       if (!this.isDragging) return;
       const dx = e.clientX - this.dragStart.x;
       const dy = e.clientY - this.dragStart.y;
-      this.x = this.cameraStart.x - dx / this.zoom;
-      this.y = this.cameraStart.y - dy / this.zoom;
-      if (this.onUpdate) this.onUpdate();
+      if (!this.hasMoved && Math.hypot(dx, dy) > 5) {
+        this.hasMoved = true;
+      }
+      if (this.hasMoved) {
+        this.x = this.cameraStart.x - dx / this.zoom;
+        this.y = this.cameraStart.y - dy / this.zoom;
+        if (this.onUpdate) this.onUpdate();
+      }
     });
 
     const stopDrag = (e) => {
+      if (!this.isDragging) return;
       this.isDragging = false;
+      try {
+        if (el.hasPointerCapture(e.pointerId)) {
+          el.releasePointerCapture(e.pointerId);
+        }
+      } catch (err) {}
+
+      // If mouse did not drag, fire clean instant click callback!
+      if (!this.hasMoved && this.onClick) {
+        this.onClick(e.clientX, e.clientY);
+      }
+      this.hasMoved = false;
     };
 
     el.addEventListener('pointerup', stopDrag);
-    el.addEventListener('pointercancel', stopDrag);
+    el.addEventListener('pointercancel', (e) => {
+      this.isDragging = false;
+      this.hasMoved = false;
+      try {
+        if (el.hasPointerCapture(e.pointerId)) {
+          el.releasePointerCapture(e.pointerId);
+        }
+      } catch (err) {}
+    });
   }
 }
