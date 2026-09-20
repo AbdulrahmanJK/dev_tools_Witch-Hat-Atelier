@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Witch Hat Atelier — Architectural Grimoire</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Header Controls -->
+    <header id="grimoire-header">
+      <div class="brand-section">
+        <div class="wax-seal-icon">✦</div>
+        <div>
+          <div class="brand-title">Atelier Grimoire</div>
+          <div class="brand-subtitle" id="project-stats-label">Consulting Archives…</div>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <!-- Search bar -->
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="node-search" class="search-input" placeholder="Search glyph or component…">
+        </div>
+
+        <!-- Elemental Filter Pills -->
+        <div class="filter-pills" id="element-filters">
+          <button class="pill-btn active" data-el="all">All</button>
+          <button class="pill-btn" data-el="Fire">Fire</button>
+          <button class="pill-btn" data-el="Water">Water</button>
+          <button class="pill-btn" data-el="Earth">Earth</button>
+          <button class="pill-btn" data-el="Wind">Wind</button>
+          <button class="pill-btn" data-el="Light">Light</button>
+        </div>
+
+        <!-- Action / View Controls -->
+        <button class="action-btn" id="btn-fit-world">
+          <span>⊕</span> Fit Kingdom
+        </button>
+      </div>
+    </header>
+
+    <!-- Infinite Canvas Viewport -->
+    <main id="viewport-container">
+      <canvas id="grimoire-canvas"></canvas>
+
+      <!-- Zoom HUD -->
+      <div class="canvas-hud">
+        <button class="hud-btn" id="btn-zoom-out">−</button>
+        <span class="zoom-level-text" id="zoom-text">45%</span>
+        <button class="hud-btn" id="btn-zoom-in">+</button>
+      </div>
+
+      <!-- Inspector Scroll (Slide-out drawer) -->
+      <aside id="inspector-drawer">
+        <div class="scroll-header">
+          <div>
+            <div class="seal-badge-row">
+              <span class="element-badge" id="insp-element">Element</span>
+              <span class="grade-badge" id="insp-grade">Grade</span>
+            </div>
+            <h2 class="seal-title" id="insp-title">Component</h2>
+            <div class="seal-cluster-tag" id="insp-cluster">Archipelago</div>
+          </div>
+          <button class="close-drawer-btn" id="btn-close-drawer">✕</button>
+        </div>
+
+        <div class="scroll-body">
+          <!-- Quantitative metrics -->
+          <div class="meta-box">
+            <div>
+              <div class="meta-item-val" id="insp-loc">0</div>
+              <div class="meta-item-lbl">Lines of Code</div>
+            </div>
+            <div>
+              <div class="meta-item-val" id="insp-hooks-count">0</div>
+              <div class="meta-item-lbl">Keystones</div>
+            </div>
+            <div>
+              <div class="meta-item-val" id="insp-children-count">0</div>
+              <div class="meta-item-lbl">Sub-Glyphs</div>
+            </div>
+          </div>
+
+          <!-- Stability Verdict -->
+          <div>
+            <div class="section-label">Stability & Day of Pact</div>
+            <div class="stability-card" id="insp-stability-card">
+              <div class="stability-title" id="insp-stability-grade">Master Seal</div>
+              <div class="stability-note" id="insp-stability-note">—</div>
+            </div>
+          </div>
+
+          <!-- Hooks & Keystones Breakdown -->
+          <div>
+            <div class="section-label">Enchanted Keystones (Hooks)</div>
+            <div class="keystone-list" id="insp-keystones-list">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Dependent Links -->
+          <div>
+            <div class="section-label">Sub-Glyphs Rendered (Children)</div>
+            <div class="link-pills" id="insp-children-pills">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Dispatched Redux Actions -->
+          <div id="insp-redux-section" style="display:none">
+            <div class="section-label">Power Veins Dispatched (Actions)</div>
+            <div class="link-pills" id="insp-redux-pills">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Open in VSCode button -->
+          <a class="open-ide-btn" id="btn-open-ide" href="#" target="_blank">
+            <span>🖋</span> Inscribe in Editor
+          </a>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

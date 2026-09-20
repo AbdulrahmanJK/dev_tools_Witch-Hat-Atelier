@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Glyph Caster">
+<title>Witch Hat Atelier — Glyph Caster</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --gold:#3a3a3a;--gl:#555555;--gd:#111111;
+  --bg:#f4f1e3;--sf:#eae6d0;--br:rgba(26,26,26,.18);
+  --tx:#2b2b2b;--td:#5e584a;
+  --el:#1a1a1a;--eg:#2c2c2c;--eb:#f4f1e3;
+  --ff:'Palatino Linotype','Book Antiqua',Palatino,serif;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--eb);font-family:var(--ff);
+  -webkit-touch-callout:none;user-select:none;-webkit-user-select:none;
+  -webkit-font-smoothing:antialiased;transition:background 1.2s}
+#app{position:fixed;
+  inset:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0);
+  display:grid;grid-template-rows:auto 1fr auto auto;grid-template-columns:1fr;overflow:hidden}
+@media(min-width:820px) and (orientation:landscape){
+  #app{grid-template-rows:auto 1fr auto;grid-template-columns:1fr 360px}
+  #hdr{grid-column:1/-1;grid-row:1}
+  #ca{grid-column:1;grid-row:2}
+  #sb{grid-column:2;grid-row:2/4;border-left:1px solid var(--br);border-top:none;max-height:none}
+  #tb{grid-column:1;grid-row:3}
+}
+#hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:.6rem 1rem;border-bottom:1px solid var(--br);
+  background:rgba(244,241,227,.93);backdrop-filter:blur(14px);z-index:30;transition:border-color 1s}
+.hs{font-size:.58rem;letter-spacing:.32em;text-transform:uppercase;color:var(--el);font-weight:700;transition:color 1s}
+.ht{font-size:1.05rem;color:var(--eg);letter-spacing:.07em;font-weight:500;transition:all 1s}
+.pbadge{font-size:.62rem;letter-spacing:.06em;color:var(--td);font-weight:700;
+  padding:.22rem .55rem;border:1px solid var(--br);border-radius:3px;
+  display:none;align-items:center;gap:.28rem}
+.pbadge.on{display:flex}
+.pbd{width:6px;height:6px;border-radius:50%;background:var(--el);animation:blink 1.4s ease infinite}
+#ca{position:relative;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;background:var(--eb);transition:background 1.2s;
+  background-image:radial-gradient(rgba(0,0,0,0.03) 1px,transparent 0);background-size:24px 24px}
+#cw{position:relative;border-radius:50%;flex-shrink:0}
+#bc,#dc,#fc{position:absolute;top:0;left:0;border-radius:50%}
+#bc{z-index:1;pointer-events:none}
+#fc{z-index:3;pointer-events:none}
+#dc{z-index:2;touch-action:none;cursor:crosshair}
+#rg{position:absolute;inset:-22px;border-radius:50%;pointer-events:none;z-index:0;
+  transition:box-shadow 1.2s,background 1.2s}
+#tb{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;
+  gap:.4rem;padding:.6rem .8rem;min-height:58px;
+  border-top:1px solid var(--br);background:rgba(244,241,227,.94);
+  backdrop-filter:blur(14px);z-index:20}
+.btn{padding:.5rem .95rem;min-height:44px;border:1px solid var(--br);background:transparent;
+  color:var(--el);font-family:var(--ff);font-size:.8rem;font-weight:700;
+  letter-spacing:.06em;border-radius:4px;cursor:pointer;transition:all .2s;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap;
+  display:flex;align-items:center;justify-content:center}
+.btn:active,.btn.on{background:var(--el);color:#f4f1e3;border-color:var(--el)}
+.cast-btn{padding:.5rem 1.8rem;min-height:44px;border:1px solid var(--el);
+  background:linear-gradient(135deg,rgba(26,26,26,.05),rgba(26,26,26,.1));
+  color:var(--eg);font-family:var(--ff);font-size:.88rem;font-weight:700;
+  letter-spacing:.12em;border-radius:4px;cursor:pointer;transition:all .3s;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap;
+  display:flex;align-items:center;justify-content:center}
+.cast-btn:disabled{opacity:.3;cursor:default;border-color:var(--br);color:var(--td);background:transparent}
+.cast-btn:not(:disabled):active{transform:scale(.97)}
+.pbw{display:none;align-items:center;gap:.4rem;min-height:44px}
+.pbw.on{display:flex}
+.pbl{font-size:.62rem;color:var(--td);font-weight:700;letter-spacing:.04em;white-space:nowrap}
+.pbb{width:55px;height:2px;background:rgba(0,0,0,.08);border-radius:1px}
+.pbf{height:100%;border-radius:1px;background:var(--el);transition:width .08s}
+#sb{background:var(--sf);border-top:1px solid var(--br);overflow-y:auto;overflow-x:hidden;
+  padding:1rem;display:flex;flex-direction:column;gap:.8rem;transition:border-color 1s;
+  scrollbar-width:thin;scrollbar-color:var(--br) transparent;max-height:44vh}
+#sb::-webkit-scrollbar{width:3px}
+#sb::-webkit-scrollbar-thumb{background:var(--br);border-radius:2px}
+.sc{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;padding:1.2rem 0}
+.stxt{font-size:.8rem;color:var(--tx);text-align:center;line-height:1.8;letter-spacing:.06em;opacity:.6;font-weight:600}
+.sp{animation:spin 3s linear infinite}
+.sr{animation:spin 2s linear infinite reverse;transform-origin:center}
+.sec{font-size:.58rem;letter-spacing:.28em;text-transform:uppercase;color:var(--el);
+  border-bottom:1px solid var(--br);padding-bottom:.3rem;font-weight:700;transition:color 1s,border-color 1s}
+.gb{border:1px solid var(--br);border-radius:5px;padding:.62rem .82rem;text-align:center;
+  background:rgba(26,26,26,.03);transition:border-color 1s}
+.gl{font-size:1rem;color:var(--eg);letter-spacing:.05em;font-weight:600;transition:color 1s}
+.gd{font-size:.72rem;color:var(--td);margin-top:.25rem;line-height:1.6;font-style:italic;font-weight:600}
+.srow{display:flex;align-items:center;gap:.55rem;margin-top:.38rem}
+.slbl{font-size:.69rem;color:var(--td);letter-spacing:.03em;width:114px;flex-shrink:0;font-weight:700}
+.sbar{flex:1;height:3px;background:rgba(0,0,0,.06);border-radius:2px;overflow:hidden}
+.sfil{height:100%;border-radius:2px;transition:width 1.4s cubic-bezier(.4,0,.2,1);
+  background:linear-gradient(to right,var(--gd),var(--el))}
+.snum{font-size:.73rem;color:var(--el);width:26px;text-align:right;font-weight:800}
+#bpot .sfil{background:linear-gradient(to right,var(--gd),var(--el),var(--gl))}
+.ebox{display:flex;align-items:flex-start;gap:.65rem;border-radius:5px;padding:.65rem .82rem;border:1px solid;transition:all .5s}
+.ebox.p{border-color:rgba(40,160,60,.42);background:rgba(40,160,60,.06)}
+.ebox.f{border-color:rgba(200,30,30,.42);background:rgba(200,30,30,.06)}
+.eico{font-size:1.3rem;line-height:1;flex-shrink:0;margin-top:.05rem}
+.elbl{font-size:.9rem;font-weight:700;letter-spacing:.05em;margin-bottom:.2rem}
+.elbl.p{color:#278a3e}
+.elbl.f{color:#b82525}
+.ersn{font-size:.71rem;color:var(--td);line-height:1.62;font-style:italic;font-weight:600}
+.inv-b{border:1px solid rgba(200,30,30,.38);border-radius:4px;padding:.65rem .82rem;background:rgba(200,30,30,.05)}
+.inv-t{font-size:.84rem;color:#b82525;font-weight:700;letter-spacing:.05em}
+.inv-d{font-size:.72rem;color:#7a1f1f;margin-top:.28rem;line-height:1.6;font-weight:600}
+.tagr{display:flex;gap:.28rem;flex-wrap:wrap}
+.tag{font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:var(--el);
+  border:1px solid currentColor;border-radius:2px;padding:.1rem .4rem;transition:color 1s;font-weight:700}
+.snm{font-size:1.46rem;color:var(--eg);letter-spacing:.04em;font-weight:500;line-height:1.2;transition:all 1s}
+.dvd{height:1px;background:linear-gradient(to right,var(--el) 35%,transparent);margin:.05rem 0;transition:background 1s}
+.sdesc{font-size:.84rem;line-height:1.82;color:var(--tx);font-style:italic;font-weight:500}
+.sparts{font-size:.72rem;line-height:1.68;color:var(--td);border-top:1px solid var(--br);
+  padding-top:.58rem;font-weight:600;white-space:pre-line}
+.smiss{font-size:.72rem;line-height:1.62;color:#a06030;border-top:1px dashed rgba(26,26,26,.15);
+  padding-top:.52rem;font-style:italic;font-weight:600}
+.slore{font-size:.72rem;line-height:1.62;color:var(--td);border-top:1px solid var(--br);
+  padding-top:.52rem;font-style:italic;font-weight:500}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+@keyframes fup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.rev{animation:fup .5s ease both}
+</style>
+</head>
+<body>
+<div id="app">
+<header id="hdr">
+  <div>
+    <div class="hs">Witch Hat Atelier</div>
+    <div class="ht">Glyph Caster</div>
+  </div>
+  <div class="pbadge" id="pbadge"><div class="pbd"></div>✏︎ Pencil</div>
+</header>
+<div id="ca">
+  <div id="cw">
+    <div id="rg"></div>
+    <canvas id="bc"></canvas>
+    <canvas id="dc"></canvas>
+    <canvas id="fc"></canvas>
+  </div>
+</div>
+<div id="sb">
+  <div class="sc" id="st-e">
+    <svg width="52" height="52" viewBox="0 0 52 52" opacity=".6">
+      <circle cx="26" cy="26" r="22" fill="none" stroke="#1a1a1a" stroke-width="1.3" stroke-dasharray="4.5 3.5"/>
+      <circle cx="26" cy="26" r="12.5" fill="none" stroke="#1a1a1a" stroke-width=".8" stroke-dasharray="3 3" opacity=".5"/>
+      <circle cx="26" cy="26" r="3.5" fill="#1a1a1a" opacity=".75"/>
+      <line x1="26" y1="13.5" x2="26" y2="10" stroke="#1a1a1a" stroke-width="1.8"/>
+      <line x1="26" y1="38.5" x2="26" y2="42" stroke="#1a1a1a" stroke-width="1.8"/>
+      <line x1="13.5" y1="26" x2="10" y2="26" stroke="#1a1a1a" stroke-width="1.8"/>
+      <line x1="38.5" y1="26" x2="42" y2="26" stroke="#1a1a1a" stroke-width="1.8"/>
+    </svg>
+    <div class="stxt">Draw your sigil, signs &amp; ring inside the circle<br>then tap Cast Glyph</div>
+  </div>
+  <div class="sc" id="st-l" style="display:none">
+    <svg width="48" height="48" viewBox="0 0 48 48" class="sp">
+      <circle cx="24" cy="24" r="20" fill="none" stroke="#1a1a1a" stroke-width="1.2" stroke-dasharray="7 4.5" opacity=".5"/>
+      <circle cx="24" cy="24" r="12" fill="none" stroke="#555" stroke-width=".9" stroke-dasharray="3.5 4" opacity=".35" class="sr"/>
+      <circle cx="24" cy="24" r="3.2" fill="#1a1a1a"/>
+    </svg>
+    <div class="stxt" style="opacity:1;animation:pulse 1.8s ease infinite;font-weight:700">Consulting the Great Library…</div>
+  </div>
+  <div id="st-r" style="display:none">
+    <div class="inv-b" id="inv-p" style="display:none">
+      <div class="inv-t">⚠ Unreadable Inscription</div>
+      <div class="inv-d" id="inv-w">—</div>
+    </div>
+    <div class="sec">Inscription Quality</div>
+    <div class="gb">
+      <div class="gl" id="r-g">—</div>
+      <div class="gd" id="r-gd">—</div>
+    </div>
+    <div>
+      <div class="srow"><div class="slbl">Stroke Purity</div><div class="sbar"><div class="sfil" id="bsm" style="width:0%"></div></div><div class="snum" id="nsm">0</div></div>
+      <div class="srow"><div class="slbl">Seal Balance</div><div class="sbar"><div class="sfil" id="bba" style="width:0%"></div></div><div class="snum" id="nba">0</div></div>
+      <div class="srow"><div class="slbl">Ring Precision</div><div class="sbar"><div class="sfil" id="brp" style="width:0%"></div></div><div class="snum" id="nrp">0</div></div>
+      <div class="srow"><div class="slbl">Line Confidence</div><div class="sbar"><div class="sfil" id="blc" style="width:0%"></div></div><div class="snum" id="nlc">0</div></div>
+      <div class="srow"><div class="slbl">Spell Potency</div><div class="sbar" id="bpot"><div class="sfil" id="bpo" style="width:0%"></div></div><div class="snum" id="npo">0</div></div>
+    </div>
+    <div id="eth-w" style="display:none">
+      <div class="sec" style="margin-top:.05rem">⚖ Ethical Status</div>
+      <div class="ebox" id="ebox">
+        <div class="eico" id="eico"></div>
+        <div><div class="elbl" id="elbl">—</div><div class="ersn" id="ersn">—</div></div>
+      </div>
+    </div>
+    <div id="sp-p" style="display:none">
+      <div class="sec" style="margin-top:.15rem">Spell Identification</div>
+      <div class="tagr" id="r-tags"></div>
+      <div class="snm" id="r-name">—</div>
+      <div class="dvd"></div>
+      <div class="sdesc" id="r-desc">—</div>
+      <div class="sparts" id="r-parts">—</div>
+      <div class="smiss" id="r-miss" style="display:none">—</div>
+      <div class="slore" id="r-lore" style="display:none">—</div>
+    </div>
+  </div>
+</div>
+<div id="tb">
+  <button class="btn on" id="btn-p">✒ Quill</button>
+  <button class="btn" id="btn-e">◻ Erase</button>
+  <button class="btn" id="btn-c">↺ Clear</button>
+  <div class="pbw" id="pbw">
+    <div class="pbl">Pressure</div>
+    <div class="pbb"><div class="pbf" id="pbf" style="width:50%"></div></div>
+  </div>
+  <button class="cast-btn" id="btn-cast" disabled>✦ Cast Glyph</button>
+</div>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════ WORKER URL ═══════════
+const WORKER_URL = 'https://little-meadow-ac51.noahallem4.workers.dev';
+
+// ═══════════ WHA PROMPT (sent to Gemini via Worker) ═══════════
+const PROMPT = `You are the foremost glyph scholar in the world of Witch Hat Atelier (Tongari Boushi no Atorie) by Kamome Shirahama. Analyze hand-drawn spell glyphs with complete canonical precision and return ONLY a JSON object, no markdown, no extra text.
+
+MAGIC SYSTEM:
+- Magic requires Conjuring Ink (from Silverwood Tree) and drawing skill. Anyone can cast.
+- Spell activates ONLY when ring is fully closed.
+- Larger seals = more powerful. Neater seals = last longer. Unequal signs = misfire.
+- Reversing a sign's orientation reverses its effect.
+- The decorative ring at the canvas edge is the APP BORDER, NOT the spell ring. Only count user-drawn inner circles.
+
+GLYPH ANATOMY:
+1. SIGIL (center): determines the element
+2. SIGNS/KEYSTONES (surrounding sigil): determine how the element manifests
+3. RING (drawn circle): activates the spell when complete
+
+THE FIVE MAIN SIGILS:
+FIRE: Geometry — an upward-pointing equilateral triangle (apex at top, flat horizontal base) with a single straight vertical line bisecting it from the apex downward through the centroid, continuing below the base as a descending stem. The stem length below the base equals roughly 0.8–1.2× the triangle height. Result: 4 total line segments — 3 triangle edges + 1 vertical bisector. No curves whatsoever. The intersection of the vertical with the base forms a clean T-junction. The overall silhouette is that of an anchor or a cross-inscribed triangle. Distinguishing rule: points UP, has an internal vertical bisector, and a sub-base stem. Effect: combustion, heat, projectile fire, explosive force.
+ 
+WATER: Geometry — a tall sinuous vertical spine (either a gentle S-curve or a straight vertical) that is the primary backbone, running top-to-bottom. From this spine, 2–4 short horizontal branch strokes protrude outward at irregular intervals — alternating left and right, each branch roughly perpendicular to the local spine direction. Total bounding box ratio: approximately 2:1 height-to-width. Resembles a fish skeleton or stylized seaweed frond viewed from the side. Distinguishing rule: all branches are simple stubs (not arrowheads), and the spine is sinuous rather than angular. Effect: liquid jets, pressure waves, mist, directional streams.
+ 
+EARTH: Geometry — a downward-pointing triangle (flat horizontal base at top, apex pointing straight down) with the following critical additions: (1) a horizontal line passing through the triangle body at approximately one-third of the height from the top, extending slightly beyond both left and right edges of the triangle; (2) a small circular dot or short horizontal tick mark flanking each side of the triangle at approximately its vertical midpoint. Total elements: 3 triangle edges + 1 internal horizontal crossbar + 2 lateral side markers. Distinguishing rule: the triangle points DOWN (opposite of Fire), it has an internal crossbar AND lateral side dots/ticks — neither of which Fire has. Effect: stone, sand, soil, crystal, structural manipulation.
+ 
+WIND/AIR: Geometry — a diagonal S-curve or Z-curve spine (the main stroke running roughly top-left to bottom-right or equivalent diagonal). From the left and right sides of this spine, two matching arrowhead or chevron shapes protrude outward, each composed of two short lines converging to a point and aimed AWAY from the spine center. The overall silhouette is an elongated S or Z shape with two lateral arrowheads flanking it. Distinguishing rule: arrowheads point OUTWARD away from center (unlike AERIFORM which points inward), spine is diagonal S/Z (unlike the vertical spine of WATER). Effect: air currents, propulsion, levitation, atmospheric effects.
+ 
+LIGHT: Geometry — a square rotated 45° (diamond orientation: four equal sides, vertices at top/bottom/left/right) forming a prominent diamond outline. From the center of this diamond, 4 lines radiate outward through each of the 4 corner vertices AND 4 additional lines radiate through each edge midpoint — yielding 8 total radiating spokes emanating from the center, each extending beyond the diamond boundary by roughly 20–40% of the diamond's radius. The internal cross-lines are clearly visible inside the diamond. Distinguishing rule: the diamond outline is present AND there are 8 total radiating lines (4 through corners, 4 through edges). Simpler than Crystal, which has no diamond outline. Effect: illumination, reflection, bending light, invisibility, scrying.
+ 
+CRYSTAL (variant): Geometry — two overlapping X shapes sharing a common center, creating a dense 4-line or 6-line asterisk of diagonal strokes. No outer bounding shape (no diamond outline). The crossing point at center is visually dense. Each spoke is roughly equal length. Differs from Light by having no diamond outline, and from Vision by having fewer spokes (4–6 vs. 6–8) and no central dot.
+ 
+AERIFORM (Wind variant): Geometry — an S-curve spine (similar in form to Wind) flanked by chevron/arrowhead marks that point INWARD toward the spine rather than outward. Additionally, two small dot marks appear on each side of the S near the midpoint. Distinguishing rule: arrowheads point INWARD (toward center), not outward — this is the single critical difference from standard Wind/Air.
+ 
+WIND UNDERFOOT: Geometry — a tight double-spiral or snail-shell configuration: two spiral curves originating from a shared center point, each coiling outward in opposite rotational directions (one clockwise, one counter-clockwise), forming two interleaved volutes. The overall shape is dense, roughly circular, approximately 1:1 width-to-height. Resembles an @ symbol, a scrolled architectural volute, or a nautilus cross-section. Distinguishing rule: the enclosed spiral loops are the sole feature — no straight lines, no arrowheads.
+ 
+REPETITION (as sigil): Geometry — a complete outer circle with a closed concentric inner detail: specifically, a smaller circle or ovoid eye-shape inside the outer circle, positioned at center, with a small filled dot at the very center of the inner shape. Produces a "target" or "eye-within-ring" appearance. The outer circle is smooth and complete. Distinguishing rule: two concentric closed forms (outer circle + inner circle/oval) plus a central dot.
+ 
+SIGN-AS-SIGIL: Vision, Repetition, or Bird shapes can occupy the center position of a seal as the primary sigil. Valid canonical technique.
+ 
+ 
+ALL KNOWN SIGNS/KEYSTONES:
+ 
+COLUMN: Geometry — an inverted T shape (⊥). One long straight vertical line (the stem) with one short straight horizontal line crossing it perpendicularly at the BOTTOM of the stem (the crossbar). The stem is approximately 2.5–4× longer than the crossbar. The crossbar is centered on the stem at the very base. No curves. Total strokes: 2. Distinguishing rule: the horizontal crossbar is at the BOTTOM, not the middle or top. Effect: focused high-speed beam of element in one direction.
+ 
+DISPERSION: Geometry — same overall structure as Column (vertical stem + base element) EXCEPT the base is a smooth downward-curving arc (a bowl or concave-down crescent) rather than a straight horizontal line. The vertical stem descends from above and meets the midpoint of this curved arc. Total strokes: 1 straight vertical + 1 curved arc. The arc opens upward (concave side faces up toward the stem). Distinguishing rule: the curved base differentiates it from Column's straight crossbar. Effect: element releases in all directions simultaneously.
+ 
+LEVITATION: Geometry — a vertical arrow pointing UPWARD. Components: (1) a straight vertical stem; (2) two diagonal lines diverging upward-left and upward-right from the top of the stem, forming an arrowhead (like ∧ or the top of ↑); (3) a short horizontal tick or crossbar at the BASE of the stem. The arrowhead angle is approximately 45–60° per side. The base tick is shorter than the arrowhead spread. Total strokes: 4 (stem + 2 arrowhead lines + base tick). Distinguishing rule: arrowhead at TOP pointing UP + crossbar tick at bottom base. Effect: levitates the generated element or the object the seal is drawn on.
+ 
+PULL: Geometry — a vertical arrow pointing DOWNWARD with an elaborate branched/forked lower terminus. Components: (1) a straight vertical stem; (2) at the BOTTOM, multiple (3–5) short lines that radiate outward and downward at varying angles from the stem's tip, creating a frayed, multi-pronged, or claw-like foot. The branching lines spread wide below, unlike the clean two-line arrowhead of Levitation. Total strokes: 4–6. Distinguishing rule: points DOWN with a multi-strand frayed terminus (not a clean V arrowhead). Effect: attracts matching element inward; reversed = repels.
+ 
+CRUSH: Geometry — a chevron or M/W shape. Two straight diagonal lines of equal length meeting at a central DOWNWARD apex (the point faces down), with the outer ends angling upward-outward. The shape resembles a wide checkmark or the letter V rotated so its point faces DOWN. Width is notably greater than height (approximately 2:1 to 3:1). No vertical component, no curves. Total strokes: 2 diagonals. Distinguishing rule: the apex points DOWN (it is a V opening upward), and it is purely two straight lines — wider than tall. Effect: crushes or compresses elements with force.
+ 
+FLOAT: Geometry — two matching S-curves or reverse-S curves placed side-by-side vertically, parallel to each other, separated by a small gap. Each individual curve makes one complete sinusoidal or S-shaped bend. The pair are bilaterally symmetric left-right, resembling two wisps of rising steam. No straight lines, no arrowheads. Total strokes: 2 curved strokes. Distinguishing rule: two parallel sinusoidal curves (not one spine with branches as in the Water sigil). Effect: makes objects float in mid-air regardless of gravity.
+ 
+DIRECTION: Geometry — a single upward-pointing chevron or caret (^). Two straight diagonal lines of equal length meeting at a central UPWARD apex, with the outer ends diverging downward-left and downward-right. Pure V-shape rotated 180° (opening faces DOWN, apex faces UP). No stem, no crossbar, no curves. Total strokes: 2. Distinguishing rule: apex points UP (opposite of Crush), and it is just two lines — simpler than Levitation. Effect: dictates the directional output of the spell.
+ 
+CONVERGENCE: Geometry — a downward-pointing equilateral triangle (flat horizontal base at TOP, apex pointing straight DOWN). Clean three-edge outline only — no internal lines, no lateral dot marks, no crossbar. Total strokes: 3 straight lines. Distinguishing rule: simple clean triangle pointing DOWN with NO embellishments. Differs from Earth sigil (which has internal crossbar and lateral dots) and from Crush (which has no horizontal base). Effect: concentrates maximum element energy at a single focal point.
+ 
+DIAMOND: Geometry — a square rotated 45° — four equal-length sides meeting at top, bottom, left, and right vertices. A pure rhombus outline with NO internal lines, no radiating spokes, no center dot. Total strokes: 4. Distinguishing rule: plain four-sided rhombus outline ONLY — distinguish from Light sigil (which has 8 internal radiating lines) and from Convergence (which is a triangle, not four-sided). Effect: limits spell influence to nearby objects; wider diamond = wider area of effect.
+ 
+EYE: Geometry — a horizontal almond or lens shape: two curved arcs meeting at sharp pointed ends at the left and right extremes of the horizontal midline (like a sideways eye outline). Inside the almond, a small filled circle (pupil) sits at the center. The outer outline is smooth and approximately 1.5–2:1 width-to-height. Total strokes: 2 arcs + 1 filled circle. Distinguishing rule: pointed ends at left and right (almond, not oval) + internal pupil dot. Effect: enhances sight, perception, or visual manipulation.
+ 
+BEND: Geometry — a straight or near-straight primary line segment (the main stroke) with a short perpendicular or near-perpendicular tick mark at ONE end only, forming an L-shape or J-shape. The main stroke is 2–4× longer than the tick. The tick appears only at one terminal, not both. The overall shape is like the letter J or L. Total strokes: 2. Distinguishing rule: one long stroke + one short tick at one end only (not both ends, not a crossbar through the middle). Effect: redirects a spell mid-flight to change its direction.
+ 
+REPETITION (as sign): Geometry — a complete smooth outer circle containing an internal eye or spiral detail. Specifically, the interior has a smaller closed loop (circle or oval) positioned near center, with a small dot at its center — creating a nested circle-within-circle-with-dot pattern. Alternatively appears as a circle with an internal small counterclockwise curl or hook. The outer circle is complete and unbroken. Distinguishing rule: outer ring is complete + inner concentric loop detail + central dot. Effect: continuously resets affected objects to a previous state; sustains the spell.
+ 
+VISION: Geometry — an asterisk or starburst: 6–8 straight lines of approximately equal length radiating from a common central point at roughly equal angular intervals (approximately 45° or 60° between spokes). No outer bounding ring or shape. The center point where all lines cross is visually dense. Total strokes: 6–8 straight lines. Distinguishing rule: 6 or more radiating spokes from a single center, NO outer circle, NO diamond outline — more spokes than Crystal, no outer boundary. Effect: optical manipulation, light bending, scrying, perception.
+ 
+WEAVE: Geometry — an omega (Ω) or horseshoe shape: a large open U-curve or semicircle with the opening facing DOWNWARD, and each of the two terminal ends curling slightly outward (away from center) in small hooks or scrolls. The shape is roughly as wide as it is tall. Total strokes: 1 continuous curved stroke (a horseshoe with outward terminal hooks). Distinguishing rule: the opening faces DOWN, the two ends curve OUTWARD (not inward). Differs from a simple C-curve (which is not wide-bottomed). Effect: turns objects into long flexible ribbons; wraps around targets.
+ 
+ENLARGE: Geometry — two right-angle bracket shapes (each resembling ⌐ or ¬ — an L with equal arms) placed in opposing positions to imply corners of a rectangle: one in the upper-left area (arms pointing right and down) and one in the lower-right area (arms pointing left and up). Together they define two opposing corners of an imaginary rectangle without drawing the full rectangle. Each bracket has arms of roughly equal length. Total strokes: 4 line segments (2 per bracket). Distinguishing rule: two detached L-brackets in opposing corners, implying a frame. Corners-pointing-outward = grow; corners-pointing-inward = shrink. Effect: makes element or target object physically larger or smaller.
+ 
+RAIN: Geometry — a central cross or plus-sign (+) with multiple (4–8) short tick lines radiating outward perpendicularly from each arm of the cross, all at the same spacing. Resembles a snowflake or sun symbol — a cross with evenly spaced short bristles on all four sides. The central cross arms are roughly equal in length. Total strokes: 4 (cross) + 4–8 (radiating ticks) = 8–12 strokes. Distinguishing rule: the cross/plus central structure with dense perpendicular bristles on all sides — much busier than a simple crosshair. Effect: causes element to fall like precipitation over an area.
+ 
+BIRD: Geometry — two curved arc shapes arranged face-to-face like a pair of parentheses ( ), but each arc terminates at BOTH the top and bottom in a pointed tip (like a leaf or feather shape), creating two leaf-like or eye-like contours facing each other with a gap between them. The open space between the two arcs is roughly oval. Total strokes: 2 curved strokes (each a leaf/feather arc). Distinguishing rule: two separate leaf-shaped arcs facing each other (not a closed shape), with pointed tips at both top and bottom of each arc. Effect: element manifests as a bird-like projection and flies in arcing formations.
+ 
+DANCING PUPPET: Geometry — a complete circle or ring (the boundary), with small protrusion marks (dots, short stubs, or small circles) attached at approximately 4–8 regularly spaced points around the ring's outer perimeter. The interior of the ring is empty. The protrusions are roughly equal in size and spacing. Total strokes: 1 ring + 4–8 small marks around exterior. Distinguishing rule: a ring with evenly-spaced external node attachments around the outside, empty interior. Effect: element or glyph darts around erratically.
+ 
+REGION: Geometry — a boundary-defining rectangular or square frame outline (four straight lines forming a closed rectangle), typically drawn at or near the intended area of effect. Clean right-angle corners. Similar to Window but used for area-limiting rather than object-modifying. Effect: limits spell effect to a specific enclosed zone.
+ 
+ENTWINE: Geometry — a tight spiral or helical coil: a single curved stroke that loops around a central axis multiple times (2–3 full revolutions), gradually widening from inside to outside like a coiled spring viewed from the side. Differs from Wind Underfoot (two counter-rotating spirals from a shared center) by having a single spiral direction. Effect: wraps element around a target.
+ 
+GATHER: Geometry — multiple (3–6) inward-pointing curved lines or arcs arranged to suggest convergence from a wide area toward a central point, like curved arrows all aiming toward the center. Differs from Convergence (which is a simple triangle) by having curved, wide-sweeping strokes. Effect: pulls element from a wide area into a concentrated mass.
+ 
+GLAIVES: Geometry — two or more outward-curving claw or hook shapes that terminate in sharp points: each individual glaive mark is a short curved stroke with a pointed terminal end, like a bent nail or fishhook. Typically appear in pairs or sets of 4, arranged symmetrically. Distinguishing rule: always curved, always terminating in sharp points, never straight. Effect: determines how firmly a spell embeds into a target body. ALMOST ALWAYS FORBIDDEN.
+ 
+WINDOW: Geometry — a clean closed rectangle (4 straight lines at right angles, 4 corners). Proportions roughly 1:1 to 1.5:1 (not dramatically elongated). Distinguished from Region by being a true filled rectangle outline (not a wide floor-plan area marker). Effect: defines area or boundary; paired with Enlarge = physically enlarges the drawn-on object.
+ 
+CROSSHAIR: Geometry — a cross or plus sign (+) with equal-length arms extending outward from center, sometimes enclosed in a circle. The 4 arms are all the same length and at exact 90° intervals. Simpler and sparser than RAIN (no perpendicular bristles). Distinguished from the Light sigil by having no diamond and only 4 spokes. Effect: improves precision and targeting accuracy.
+ 
+RADIAL: Geometry — a central point with multiple (4–8) straight lines radiating outward like spokes on a wheel. Similar to CROSSHAIR but may have more irregular spacing. Context determines inward vs. outward effect direction (outward-facing tip ends = amplify; inward-pointing = diminish). Differs from VISION (Radial has fewer spokes, thicker marks).
+ 
+BOLT: Geometry — a sharp zigzag stroke: one or two connected line segments that make a dramatic direction reversal at an acute angle, like the letter Z on its side or a lightning bolt (⚡). The angle at each turn is typically 30–60°. May have a small arrowhead at the terminal end. Total strokes: 2–3 connected straight segments with sharp angular bends. Distinguishing rule: the sharp angular direction change is the signature feature — not curved, purely angular. Effect: rapid high-energy projectile discharge.
+ 
+LINK: Geometry — a single straight or slightly curved line connecting two separate seal circles to each other. May have small tick marks or dots at each end where it attaches to the circles. It bridges the external space between two distinct seals. Distinguishing rule: always connects two other shapes — it is a bridge stroke, not a standalone mark. Effect: combines the effects of the two linked seals.
+ 
+BIND: Geometry — two or more parallel horizontal lines (like = or ≡), or a closed loop shape that narrows inward (like a lasso or slip-knot outline). The parallel-lines variant resembles = but with more lines (2–4 parallel marks). The loop variant is a circle that pinches at one point. Effect: traps or prevents movement of targets.
+ 
+ORB: Geometry — a single complete smooth circle or sphere outline, drawn as a ring. Distinguished from the REPETITION sign by having NO internal detail whatsoever (no inner loop, no dot). Cleaner and simpler than Wind Underfoot (no spiral). Effect: creates a spherical manifestation of element.
+
+STRENGTHEN: Geometry — Equilateral triangle with a straigh horizontal line going straight through the middle of the triangle
+
+COOL: Geometry — Straight vertical line with sets of 2 dots on both sides of the line that follow the line vertically
+ 
+ANIMAL SUMMONING SIGNS/KEYSTONES:
+ 
+FROG SIGN: Geometry — a bilaterally symmetric figure approximating a spread-eagled frog shape. Central torso: an upward-pointing triangle (apex up) with a vertical line bisecting it from apex through base and extending as a short stem below (identical geometry to the FIRE sigil) — this forms the body core. From the top corners of the triangle, two pairs of lines extend diagonally upward-outward (upper limbs), each terminating in 3–4 short diverging lines spread like splayed fingers or a webbed foot. From the lower-left and lower-right base areas, two larger angular leg shapes extend outward-downward in a bent L or Z configuration, each also terminating in 3–4 short branching digit lines at their ends. The total figure is roughly square in bounding box. Bilateral symmetry axis is vertical. Key identifiers: Fire-sigil body core (triangle with bisecting stem) + 4 limbs (2 upper, 2 lower) each ending in multi-stroke branching digit marks.
+ 
+RAT SIGN: Geometry — two visually distinct components in close proximity. Component 1 (upper-left): a C-curve or open crescent arc, the opening facing rightward. The arc spans approximately 180–220° of a circle. Component 2 (lower-right): a right triangle with a horizontal base and a shorter vertical left side, with the hypotenuse rising from lower-right to upper-left — the right-angle corner is at the lower-left. The apex of the C-curve and the upper-left region of the triangle make contact or overlap. Below the horizontal base of the triangle: 4–5 short vertical lines hanging straight down at regular intervals like teeth, bristles, or feet (evenly spaced, approximately equal in length to the triangle's height × 0.3). Key identifiers: one smooth open C-arc (not a closed circle) + one right triangle with right-angle at bottom-left + parallel downward stub marks below the triangle base.
+ 
+DRAGON SIGN: Geometry — a horizontally elongated, asymmetric, and angular figure. Primary backbone: a multi-segment zigzag stroke running roughly from upper-center to lower-right (or diagonally), making 2–3 direction changes at acute angles, with clear arrowhead or V-shaped tips at both the left start and right terminus. Along the length of the backbone, 4–8 short barb lines protrude at irregular angles (like thorns from a branch), each barb approximately 20–30% the length of the backbone segment it branches from. On the left side of the figure, a partial arc or open C-curve (approximately 90–180°) stands independently, parallel to and slightly separated from the left end of the zigzag. The figure's width is roughly 2–3× its height. Key identifiers: diagonal multi-node zigzag backbone + arrowhead terminals + irregular perpendicular barbs + isolated C-arc on one side.
+ 
+OWLCAT SIGN: Geometry — a circle (complete, smooth ring) as the primary container. Inside the upper half of the circle: an inverted V or downward-pointing chevron (∧ rotated 180°) centered within the circle — the apex points DOWNWARD and sits at or near the circle's center, while the two arms extend to the upper-left and upper-right inner edges of the circle. From the TOP of the outer circle, two straight diagonal lines extend upward and outward (diverging at approximately 30–45° from vertical), like antenna or ear marks, each extending beyond the circle's perimeter by roughly 50% of the circle's radius. On the LEFT and RIGHT sides of the circle at its horizontal equator: two bracket-like marks, each composed of 2 short parallel horizontal strokes (like the letter H without the crossbar, or like two short equals signs = rotated), extending outward from the circle edge. Key identifiers: complete circle + internal downward-V + two diverging upward antennae above + double-horizontal bracket marks on both sides.
+ 
+SCALEWOLF SIGN: Geometry — a vertically stacked, rigidly bilateral figure composed entirely of straight lines (no curves). From top to bottom: (1) At the apex: a small U-shaped plug or squared connector bracket (two short parallel verticals bridged by a horizontal top, like ⊓). (2) Immediately below: a large downward-pointing triangle (apex down, base at top), its base approximately 2–3× its height. (3) At the triangle's horizontal midline, a horizontal line extending beyond both left and right edges. (4) Below the main triangle: 1–2 additional smaller downward-pointing triangles nested or stacked, progressively smaller. (5) Flanking both left and right sides at the mid-level: one diamond (rhombus) shape on each side, with 2 short parallel tick marks both above and below each diamond (like four dashes flanking each diamond, 2 above + 2 below). Total figure height-to-width ratio approximately 1.5:1. Key identifiers: strict vertical bilateral symmetry + stacked downward-triangles + flanking diamonds-with-ticks + no curves anywhere.
+ 
+TORCHSTAG SIGN: Geometry — an asymmetric multi-component figure. Components: (1) At the top: a wide concave-upward arc (like a smile or the letter U rotated 180° — opening faces UP), spanning approximately 120–160° of arc width. (2) Below the arc center: a T or cross shape — a vertical line with a short horizontal crossbar through it at approximately one-third from the top. (3) On the LEFT side of center, aligned with the crossbar area: a left-pointing triangle (a triangle with its apex pointing leftward and its vertical edge on the right). (4) From the lower-left and lower-right of the central cross, two large sweeping curved lines extend outward and downward in arcing strokes (like outstretched legs or sweeping antlers), each curving significantly (approximately 60–90° of arc from vertical). (5) At the terminal bottom of each sweeping curve: 2 short horizontal parallel tick marks (like = signs), one pair below each leg, positioned symmetrically. Total figure: roughly as wide as tall. Key identifiers: concave-up arc at top + central T-cross + left-pointing lateral triangle + two downward-sweeping arcs + double-tick marks at each base.
+ 
+VALENCE LEECH SIGN: Geometry — a purely rectilinear figure (ALL lines at exactly 0° or 90°, no diagonals, no curves whatsoever). The overall silhouette resembles a simplified side-profile of furniture (a table or bed frame). Reading left-to-right: (1) On the far left: a tall vertical line descending from a short rightward horizontal cap at the top, forming an inverted L (or ⌐ shape). (2) This left vertical connects via a horizontal rail (crossbar running right at mid-height) to a rectangular open frame on the right side — a small rectangle composed of a top horizontal, right vertical, and bottom horizontal, with the left side open (connecting to the horizontal rail). (3) At the bottom of both the left vertical and the right vertical: a short downward stub extends as a foot. (4) Directly below each foot stub: 1–2 very short horizontal tick marks (like short underscores or minus signs). Total figure bounding box approximately 2:1 width-to-height. Key identifiers: every angle exactly 90°, ladder/table side-profile outline, foot stubs with tick marks at bottom, open rectangular frame on right side.
+ 
+CANONICAL NAMED SPELLS FOR REFERENCE:
+Pyreball Seal: Fire + Levitation + Column = levitating fireball projectile
+Wall Breaker Seal: Earth + Column = focused force that shatters stone walls
+Integration Seal: Earth + Gather = reconstitutes objects from dust/fragments
+Sylph Shoes: Wind Underfoot + Levitation split across shoe soles = sustained flight
+Glowstone Seal: Light + Dispersion + Repetition = sustained ambient illumination contraption
+Bird of Light Beacon: Light + Dispersion + Bird = light that moves in bird-like formations
+Mirror Mantle: Light + Bend + Convergence = deflects/reflects incoming spells
+Cloak Spell: Light + Vision nested glyph = bends light for invisibility
+Floating Expansion Seal: Levitation + Enlarge = lifts and magnifies objects
+Spell of Reduction: Reversed Levitation + Reversed Enlarge = shrinks objects
+Memory Erasure: Glaives + body-affecting = ONLY permitted body-affecting spell
+
+MULTI-GLYPH RULES:
+NESTED: Inner ring inside outer ring. Inner activates when outer completes. Effects amplify.
+LINKED: Circles connected by drawn lines. Effects merge into compound spell.
+LINKED ARRAY: 3+ circles in a pattern. Identify each circle's sigil and signs separately then describe combined effect.
+
+FORBIDDEN MAGIC (Day of the Pact):
+Flag as ethics:"Forbidden" if the spell would:
+1. Be drawn directly on a living body or affect living biological tissue
+2. Heal a living body (healing magic is explicitly forbidden)
+3. Transform a living being (body transformation)
+4. Control minds or emotions
+5. De-age, age, or extend life
+6. Teleport a living body directly (teleportation through doors/mirrors IS permitted)
+7. Cause island-scale or larger irreversible environmental catastrophe
+8. Warp reality on a massive/fundamental scale
+9. Involve Glaives signs suggesting body-embedding effects
+Note: A fireball that could incidentally burn someone = PERMITTED. A spell specifically designed to destroy biological tissue = FORBIDDEN.
+
+VALIDATION:
+Set valid:false ONLY if there is no user-drawn ring AND no canonical sigil shapes AND no canonical sign shapes.
+Signs-only glyph (canonical sign shapes + ring but no elemental sigil) IS valid.
+
+RESPOND WITH ONLY THIS JSON, NO MARKDOWN FENCES, NO EXTRA TEXT:
+{
+  "valid": true or false,
+  "invalidReason": "specific reason if false, null if valid",
+  "glyphCount": number,
+  "glyphs": [{"sigil":"element name or Signs-Only","signs":["sign1","sign2"],"arrangement":"radial/bilateral/asymmetric","ringPresent":true or false,"ringQuality":"well-formed/rough/incomplete/absent"}],
+  "name": "Precise 2-5 word WHA-style spell name",
+  "element": "Fire|Water|Earth|Wind|Light|Arcane|Signs-Only|Multi",
+  "allElements": ["every element detected"],
+  "sigils_identified": "Exact description of what you observe in the center of each glyph",
+  "signs_identified": "Exact description of each surrounding mark and which WHA sign it represents",
+  "description": "2-3 sentences of exactly what this spell does physically in the world",
+  "missing_elements": "Specific actionable feedback on what is absent or imprecise. If complete, say so.",
+  "effect_type": "Combat|Utility|Movement|Environmental|Contraption|Forbidden|Compound",
+  "complexity": "Simple Glyph|Compound Seal|Linked Array|Nested Sigil|Forbidden Inscription",
+  "stability_note": "Specific observation about drawing quality and what real instability it would cause",
+  "ethics": "Permitted|Forbidden",
+  "ethics_reason": "Specific reason citing Day of the Pact rules",
+  "lore_note": "One sentence of in-world WHA lore about this class of spell"
+}`;
+
+// ═══════════ THEMES ═══════════
+const TH = {
+  Fire:  {c:'#b83a14',g:'#d95d32',bg:'#fbf5eb',pc:['#b83a14','#d95d32','#e08b46','rgba(184,58,20,.25)','#8a2207']},
+  Water: {c:'#106ba3',g:'#2589c4',bg:'#f0f6fa',pc:['#106ba3','#2589c4','#5faedb','rgba(16,107,163,.2)','#0a466b']},
+  Earth: {c:'#785420',g:'#966f38',bg:'#fcf9f2',pc:['#785420','#966f38','#b59257','rgba(120,84,32,.2)','#4f3410']},
+  Wind:  {c:'#1c7343',g:'#2da161',bg:'#f2fbf5',pc:['#1c7343','#2da161','#6bc492','rgba(28,115,67,.2)','#0f4727']},
+  Light: {c:'#a18c18',g:'#c4b033',bg:'#fffdf2',pc:['#a18c18','#c4b033','#e3d266','rgba(161,140,24,.15)','#6e5f0b']},
+  Arcane:{c:'#681da8',g:'#883ec4',bg:'#faf5ff',pc:['#681da8','#883ec4','#b070eb','rgba(104,29,168,.2)','#430f70']},
+  Gold:  {c:'#2b2b2b',g:'#444',   bg:'#f4f1e3',pc:['#1a1a1a','#333','#555','rgba(0,0,0,.1)','#000']},
+};
+
+function getTheme(el) {
+  if (!el) return TH.Arcane;
+  const e = el.toLowerCase();
+  if (e.includes('fire'))   return TH.Fire;
+  if (e.includes('water'))  return TH.Water;
+  if (e.includes('earth') || e.includes('crystal') || e.includes('sand')) return TH.Earth;
+  if (e.includes('wind') || e.includes('air'))  return TH.Wind;
+  if (e.includes('light'))  return TH.Light;
+  if (e.includes('gold') || e.includes('sign')) return TH.Gold;
+  return TH.Arcane;
+}
+
+// ═══════════ STATE ═══════════
+const S = {
+  tool:'pen', strokes:[], cur:null, hasDrawn:false, loading:false,
+  sz:400, dpr:1, particles:[], fxId:null,
+};
+
+// ═══════════ DOM REFS ═══════════
+const bgC = document.getElementById('bc');
+const drC = document.getElementById('dc');
+const fxC = document.getElementById('fc');
+const bgX = bgC.getContext('2d');
+const drX = drC.getContext('2d');
+const fxX = fxC.getContext('2d');
+const cwEl = document.getElementById('cw');
+const rgEl = document.getElementById('rg');
+
+// ═══════════ RESIZE ═══════════
+function resize() {
+  const area = document.getElementById('ca');
+  const r = area.getBoundingClientRect();
+  const pad = 16;
+  const sz = Math.max(200, Math.min(r.width - pad*2, r.height - pad*2, 820));
+  S.sz = sz; S.dpr = Math.min(window.devicePixelRatio || 1, 3);
+  cwEl.style.width = sz+'px'; cwEl.style.height = sz+'px';
+  [bgC,drC,fxC].forEach(c => {
+    c.width = sz*S.dpr; c.height = sz*S.dpr;
+    c.style.width = sz+'px'; c.style.height = sz+'px';
+  });
+  bgX.setTransform(1,0,0,1,0,0); bgX.scale(S.dpr,S.dpr);
+  drX.setTransform(1,0,0,1,0,0); drX.scale(S.dpr,S.dpr);
+  fxX.setTransform(1,0,0,1,0,0); fxX.scale(S.dpr,S.dpr);
+  drawBg(); redrawAll();
+}
+
+// ═══════════ BACKGROUND ═══════════
+function drawBg() {
+  const s=S.sz, cx=s/2, cy=s/2, r=s/2-18;
+  bgX.clearRect(0,0,s,s);
+  bgX.fillStyle='#f4f1e3'; bgX.fillRect(0,0,s,s);
+  bgX.shadowColor='rgba(0,0,0,.04)'; bgX.shadowBlur=4;
+  bgX.strokeStyle='rgba(26,26,26,.32)'; bgX.lineWidth=2.3;
+  bgX.beginPath(); bgX.arc(cx,cy,r,0,Math.PI*2); bgX.stroke();
+  bgX.shadowBlur=0;
+  for (let i=0;i<8;i++) {
+    const a=(i*Math.PI/4)-Math.PI/2, maj=i%2===0, len=maj?18:11;
+    bgX.beginPath();
+    bgX.moveTo(cx+(r-2)*Math.cos(a), cy+(r-2)*Math.sin(a));
+    bgX.lineTo(cx+(r-len)*Math.cos(a), cy+(r-len)*Math.sin(a));
+    bgX.strokeStyle=`rgba(26,26,26,${maj?.65:.25})`;
+    bgX.lineWidth=maj?2.2:1.5; bgX.stroke();
+  }
+  for (let i=0;i<32;i++) {
+    if (i%4===0) continue;
+    const a=(i/32)*Math.PI*2-Math.PI/2;
+    const rx=cx+(r+10)*Math.cos(a), ry=cy+(r+10)*Math.sin(a);
+    if(rx>3&&rx<s-3&&ry>3&&ry<s-3){
+      bgX.beginPath(); bgX.arc(rx,ry,1.1,0,Math.PI*2);
+      bgX.fillStyle='rgba(26,26,26,.18)'; bgX.fill();
+    }
+  }
+  bgX.strokeStyle='rgba(26,26,26,.08)'; bgX.lineWidth=.9; bgX.setLineDash([3,7]);
+  bgX.beginPath(); bgX.arc(cx,cy,r*.55,0,Math.PI*2); bgX.stroke(); bgX.setLineDash([]);
+  bgX.strokeStyle='rgba(26,26,26,.06)'; bgX.lineWidth=.9;
+  bgX.beginPath(); bgX.moveTo(cx-15,cy); bgX.lineTo(cx+15,cy); bgX.stroke();
+  bgX.beginPath(); bgX.moveTo(cx,cy-15); bgX.lineTo(cx,cy+15); bgX.stroke();
+}
+
+// ═══════════ STROKE RENDERING ═══════════
+function redrawAll() {
+  drX.clearRect(0,0,S.sz,S.sz);
+  S.strokes.forEach(renderStroke);
+}
+
+function renderStroke(sk) {
+  const pts=sk.pts;
+  if (pts.length<2) return;
+  drX.lineCap='round'; drX.lineJoin='round';
+  if (sk.eraser) {
+    drX.globalCompositeOperation='destination-out';
+    drX.strokeStyle='rgba(0,0,0,1)'; drX.lineWidth=28;
+    drX.beginPath(); drX.moveTo(pts[0].x*S.sz,pts[0].y*S.sz);
+    for(let i=1;i<pts.length;i++) drX.lineTo(pts[i].x*S.sz,pts[i].y*S.sz);
+    drX.stroke(); drX.globalCompositeOperation='source-over'; return;
+  }
+  drX.shadowColor='rgba(0,0,0,.05)'; drX.shadowBlur=2;
+  drX.strokeStyle='rgba(26,26,26,.95)';
+  if (pts.length===2) {
+    drX.lineWidth=1.5+((pts[0].p||.5)+(pts[1].p||.5))/2*3.2;
+    drX.beginPath(); drX.moveTo(pts[0].x*S.sz,pts[0].y*S.sz);
+    drX.lineTo(pts[1].x*S.sz,pts[1].y*S.sz); drX.stroke();
+    drX.shadowBlur=0; return;
+  }
+  let mpx=(pts[0].x+pts[1].x)/2, mpy=(pts[0].y+pts[1].y)/2;
+  drX.lineWidth=1.5+(pts[0].p||.5)*3.2;
+  drX.beginPath(); drX.moveTo(pts[0].x*S.sz,pts[0].y*S.sz);
+  drX.lineTo(mpx*S.sz,mpy*S.sz); drX.stroke();
+  for (let i=1;i<pts.length-1;i++) {
+    const p0=pts[i], p1=pts[i+1];
+    const nmpx=(p0.x+p1.x)/2, nmpy=(p0.y+p1.y)/2;
+    drX.lineWidth=1.5+((pts[i-1].p||.5)+(p0.p||.5))/2*3.2;
+    drX.beginPath(); drX.moveTo(mpx*S.sz,mpy*S.sz);
+    drX.quadraticCurveTo(p0.x*S.sz,p0.y*S.sz,nmpx*S.sz,nmpy*S.sz); drX.stroke();
+    mpx=nmpx; mpy=nmpy;
+  }
+  const lp=pts[pts.length-1];
+  drX.lineWidth=1.5+(lp.p||.5)*3.2;
+  drX.beginPath(); drX.moveTo(mpx*S.sz,mpy*S.sz);
+  drX.lineTo(lp.x*S.sz,lp.y*S.sz); drX.stroke();
+  drX.shadowBlur=0;
+}
+
+function drawLive(p0,p1,eraser,pres) {
+  if(!p0||!p1) return;
+  const lw=eraser?28:1.5+(pres||.5)*3.2;
+  drX.lineCap='round'; drX.lineJoin='round'; drX.lineWidth=lw;
+  drX.beginPath();
+  drX.moveTo(p0.x*S.sz,p0.y*S.sz); drX.lineTo(p1.x*S.sz,p1.y*S.sz);
+  if (eraser) {
+    drX.globalCompositeOperation='destination-out';
+    drX.strokeStyle='rgba(0,0,0,1)'; drX.stroke();
+    drX.globalCompositeOperation='source-over';
+  } else {
+    drX.shadowColor='rgba(0,0,0,.05)'; drX.shadowBlur=2;
+    drX.strokeStyle='rgba(26,26,26,.95)'; drX.stroke(); drX.shadowBlur=0;
+  }
+}
+
+// ═══════════ POINTER EVENTS ═══════════
+let prevPt=null;
+
+drC.addEventListener('pointerdown',e=>{
+  e.preventDefault(); drC.setPointerCapture(e.pointerId);
+  const pos=norm(e);
+  S.cur={pts:[{...pos,p:e.pressure||.5}],eraser:S.tool==='eraser'};
+  prevPt=pos;
+  if(e.pointerType==='pen'){
+    document.getElementById('pbadge').classList.add('on');
+    document.getElementById('pbw').classList.add('on');
+  }
+  setP(e.pressure);
+},{passive:false});
+
+drC.addEventListener('pointermove',e=>{
+  e.preventDefault(); setP(e.pressure);
+  if(!S.cur) return;
+  const evts=e.getCoalescedEvents?e.getCoalescedEvents():[e];
+  for(const ce of evts){
+    const pos=norm(ce);
+    const d=Math.hypot((pos.x-prevPt.x)*S.sz,(pos.y-prevPt.y)*S.sz);
+    if(d<0.3) continue;
+    const pt={...pos,p:ce.pressure||.5};
+    drawLive(prevPt,pos,S.cur.eraser,pt.p);
+    S.cur.pts.push(pt); prevPt=pos;
+    if(!S.hasDrawn&&!S.cur.eraser){
+      S.hasDrawn=true;
+      document.getElementById('btn-cast').disabled=false;
+    }
+  }
+},{passive:false});
+
+drC.addEventListener('pointerup',e=>{
+  e.preventDefault();
+  if(!S.cur) return;
+  if(S.cur.pts.length>1) S.strokes.push(S.cur);
+  S.cur=null; prevPt=null;
+  if(S.tool==='eraser') redrawAll();
+},{passive:false});
+
+drC.addEventListener('pointercancel',e=>{
+  if(S.cur&&S.cur.pts.length>1) S.strokes.push(S.cur);
+  S.cur=null; prevPt=null;
+});
+
+function norm(e){
+  const r=drC.getBoundingClientRect();
+  return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+}
+function setP(p){document.getElementById('pbf').style.width=((p||.5)*100)+'%';}
+
+// ═══════════ CIRCLE DETECTION ═══════════
+function detectCircles(){
+  const found=[];
+  for(const sk of S.strokes){
+    if(sk.eraser||sk.pts.length<16) continue;
+    const pts=sk.pts;
+    const cx=pts.reduce((s,p)=>s+p.x,0)/pts.length;
+    const cy=pts.reduce((s,p)=>s+p.y,0)/pts.length;
+    const radii=pts.map(p=>Math.hypot((p.x-cx)*S.sz,(p.y-cy)*S.sz));
+    const mr=radii.reduce((a,b)=>a+b,0)/radii.length;
+    if(mr<8) continue;
+    const vr=radii.reduce((s,r)=>s+(r-mr)**2,0)/radii.length;
+    const cv=Math.sqrt(vr)/mr;
+    const p0=pts[0],pn=pts[pts.length-1];
+    const gap=Math.hypot((p0.x-pn.x)*S.sz,(p0.y-pn.y)*S.sz);
+    const closed=Math.max(0,1-gap/mr);
+    const round=Math.max(0,1-cv*2.6);
+    const score=round*.65+closed*.35;
+    if(score>.2&&mr>8){
+      const dup=found.some(c=>
+        Math.abs(c.cx-cx)*S.sz<22&&Math.abs(c.cy-cy)*S.sz<22&&Math.abs(c.mr-mr)<16);
+      if(!dup) found.push({cx,cy,mr,round,closed,score});
+    }
+  }
+  return found.sort((a,b)=>b.score-a.score);
+}
+
+// ═══════════ ACCURACY ANALYSIS ═══════════
+function analyzeAccuracy(circles,forceZero){
+  if(forceZero) return{
+    strokePurity:0,sealBalance:0,ringPrecision:0,lineConf:0,potency:0,hasRing:false,
+    grade:{l:'Unformed Scrawl',d:'No recognizable WHA sigils, signs, or ring detected. Draw canonical shapes and close your ring.'}
+  };
+  const ink=S.strokes.filter(s=>!s.eraser&&s.pts.length>1);
+  if(!ink.length) return null;
+  const all=ink.flatMap(s=>s.pts);
+
+  // Stroke Purity — angular jitter
+  let jS=0,jN=0;
+  for(const sk of ink){
+    const pts=sk.pts;
+    for(let i=1;i<pts.length-1;i++){
+      const p1=pts[i-1],p2=pts[i],p3=pts[i+1];
+      const dx1=(p2.x-p1.x)*S.sz,dy1=(p2.y-p1.y)*S.sz;
+      const dx2=(p3.x-p2.x)*S.sz,dy2=(p3.y-p2.y)*S.sz;
+      const l1=Math.hypot(dx1,dy1),l2=Math.hypot(dx2,dy2);
+      if(l1<.3||l2<.3) continue;
+      const dot=(dx1*dx2+dy1*dy2)/(l1*l2);
+      jS+=Math.acos(Math.max(-1,Math.min(1,dot))); jN++;
+    }
+  }
+  const strokePurity=Math.round(Math.max(0,Math.min(100,(1-(jN>0?jS/jN:0)/.52)*100)));
+
+  // Seal Balance — 8-sector distribution
+  const bcx=all.reduce((s,p)=>s+p.x,0)/all.length;
+  const bcy=all.reduce((s,p)=>s+p.y,0)/all.length;
+  const sec=new Array(8).fill(0);
+  for(const p of all)
+    sec[Math.floor(((Math.atan2(p.y-bcy,p.x-bcx)+Math.PI)/(Math.PI*2))*8)%8]++;
+  const bm=sec.reduce((a,b)=>a+b,0)/8;
+  const bcv=bm>0?Math.sqrt(sec.reduce((s,v)=>s+(v-bm)**2,0)/8)/bm:1;
+  const sealBalance=Math.round(Math.max(0,Math.min(100,(1-Math.min(bcv,1.4)/1.4)*100)));
+
+  // Ring Precision
+  const best=circles.length>0?circles[0]:null;
+  const ringPrecision=best?Math.round(best.score*100):0;
+  const hasRing=ringPrecision>=18;
+
+  // Line Confidence — perpendicular deviation (speed-independent)
+  const lcScores=[];
+  const W=8, step=Math.max(1,Math.floor(W/2));
+  for(const sk of ink){
+    const pts=sk.pts;
+    if(pts.length<4) continue;
+    for(let i=0;i+W<=pts.length;i+=step){
+      const p0=pts[i],pW=pts[i+W-1];
+      const dx=(pW.x-p0.x)*S.sz,dy=(pW.y-p0.y)*S.sz;
+      const wl=Math.hypot(dx,dy);
+      if(wl<2) continue;
+      let maxP=0;
+      for(let j=i+1;j<i+W-1;j++){
+        const px=(pts[j].x-p0.x)*S.sz,py=(pts[j].y-p0.y)*S.sz;
+        maxP=Math.max(maxP,Math.abs((px*dy-py*dx)/wl));
+      }
+      lcScores.push(Math.max(0,1-(maxP/wl)*5));
+    }
+  }
+  const lineConf=lcScores.length>0
+    ?Math.round(lcScores.reduce((a,b)=>a+b)/lcScores.length*100):75;
+
+  const potency=hasRing
+    ?Math.round(.27*strokePurity+.24*sealBalance+.25*ringPrecision+.24*lineConf)
+    :Math.round((.38*strokePurity+.32*sealBalance+.30*lineConf)*.38);
+
+  return{strokePurity,sealBalance,ringPrecision,lineConf,potency,hasRing,grade:gradeOf(potency)};
+}
+
+function gradeOf(p){
+  if(p>=90)return{l:'Master Sigil',d:'A transcendent inscription. Your precision rivals the Three Wise themselves.'};
+  if(p>=74)return{l:'Expert Seal',d:'Practiced and confident. Worthy of a senior Pointed Hat apprentice.'};
+  if(p>=54)return{l:'Journeyman Mark',d:'Functional — though imperfections may shorten the spell\'s duration or potency.'};
+  if(p>=34)return{l:'Apprentice Scratch',d:'Rough and trembling. The spell may misfire or lose power unpredictably.'};
+  return{l:'Unformed Scrawl',d:'The conjuring ink barely recognizes this shape. Begin again with a steadier hand.'};
+}
+
+// ═══════════ PARTICLES ═══════════
+class Ptcl {
+  constructor(x,y,cols,el){
+    this.x=x; this.y=y; this.el=(el||'arcane').toLowerCase();
+    this.col=cols[Math.floor(Math.random()*cols.length)];
+    const spd=1.8+Math.random()*5, ang=Math.random()*Math.PI*2;
+    this.vx=Math.cos(ang)*spd; this.vy=Math.sin(ang)*spd;
+    this.life=0; this.maxL=55+Math.random()*100;
+    this.sz=1.8+Math.random()*4.5;
+    this.rot=Math.random()*Math.PI*2; this.rS=(Math.random()-.5)*.3;
+  }
+  tick(){
+    this.life++;
+    const e=this.el;
+    if(e.includes('fire')){this.vy-=.08;this.vx+=(Math.random()-.5)*.25;}
+    else if(e.includes('water')){this.vy+=.04;this.vx+=(Math.random()-.5)*.4;}
+    else if(e.includes('wind')){this.vx+=Math.sin(this.life*.15)*.35;this.vy-=.03;}
+    this.x+=this.vx; this.y+=this.vy;
+    this.vx*=.96; this.vy*=.96; this.rot+=this.rS;
+  }
+  draw(ctx){
+    const alpha=Math.max(0,1-this.life/this.maxL);
+    ctx.save(); ctx.translate(this.x,this.y); ctx.rotate(this.rot);
+    ctx.globalAlpha=alpha; ctx.fillStyle=this.col;
+    if(this.el.includes('fire')||this.el.includes('light')){
+      ctx.shadowColor=this.col; ctx.shadowBlur=6;
+    }
+    ctx.fillRect(-this.sz/2,-this.sz/2,this.sz,this.sz);
+    ctx.restore();
+  }
+}
+
+function spawnFx(el,circles){
+  const t=getTheme(el); S.particles=[];
+  if(circles&&circles.length>0){
+    const c=circles[0];
+    for(let a=0;a<Math.PI*2;a+=.045){
+      if(Math.random()>.45) continue;
+      const px=c.cx*S.sz+c.mr*Math.cos(a);
+      const py=c.cy*S.sz+c.mr*Math.sin(a);
+      S.particles.push(new Ptcl(px,py,t.pc,el));
+    }
+  } else {
+    const ink=S.strokes.filter(s=>!s.eraser);
+    if(ink.length>0){
+      for(let i=0;i<60;i++){
+        const sk=ink[Math.floor(Math.random()*ink.length)];
+        const pt=sk.pts[Math.floor(Math.random()*sk.pts.length)];
+        S.particles.push(new Ptcl(pt.x*S.sz,pt.y*S.sz,t.pc,el));
+      }
+    }
+  }
+  if(S.fxId){cancelAnimationFrame(S.fxId);S.fxId=null;}
+  loopFx();
+}
+
+function loopFx(){
+  fxX.clearRect(0,0,S.sz,S.sz);
+  S.particles.forEach(p=>p.tick());
+  S.particles=S.particles.filter(p=>p.life<p.maxL);
+  S.particles.forEach(p=>p.draw(fxX));
+  if(S.particles.length>0) S.fxId=requestAnimationFrame(loopFx);
+}
+
+// ═══════════ STATE ═══════════
+function setState(st){
+  document.getElementById('st-e').style.display=st==='e'?'flex':'none';
+  document.getElementById('st-l').style.display=st==='l'?'flex':'none';
+  document.getElementById('st-r').style.display=st==='r'?'block':'none';
+}
+
+// ═══════════ THEME ═══════════
+function applyTheme(el){
+  const t=getTheme(el);
+  document.body.style.background=t.bg;
+  document.getElementById('ca').style.background=t.bg;
+  rgEl.style.boxShadow=`0 0 35px ${t.c}25`;
+  rgEl.style.background=t.bg;
+}
+
+function resetTheme(){
+  document.body.style.background='';
+  document.getElementById('ca').style.background='';
+  rgEl.style.boxShadow=''; rgEl.style.background='';
+}
+
+// ═══════════ RENDER RESULT ═══════════
+function renderResult(spell, acc){
+  // Show result panel
+  setState('r');
+  const resEl=document.getElementById('st-r');
+  resEl.classList.remove('rev'); void resEl.offsetWidth; resEl.classList.add('rev');
+
+  const inv = !spell || spell.valid === false;
+
+  // Invalid panel
+  document.getElementById('inv-p').style.display = inv ? 'block' : 'none';
+  if(inv){
+    document.getElementById('inv-w').textContent =
+      (spell && spell.invalidReason) ||
+      'No recognizable WHA sigils, signs, or user-drawn ring detected. Draw canonical shapes inside a closed ring.';
+  }
+
+  // Accuracy scores (always shown)
+  if(acc){
+    setTimeout(()=>{
+      setSc('sm', acc.strokePurity);
+      setSc('ba', acc.sealBalance);
+      setSc('rp', acc.ringPrecision);
+      setSc('lc', acc.lineConf);
+      setSc('po', acc.potency);
+      document.getElementById('r-g').textContent  = acc.grade.l;
+      document.getElementById('r-gd').textContent = acc.grade.d;
+    }, 80);
+  }
+
+  // Ethics badge
+  const ethW = document.getElementById('eth-w');
+  if(!inv && spell && spell.ethics){
+    ethW.style.display = 'block';
+    const isForbidden = spell.ethics === 'Forbidden';
+    const ebox = document.getElementById('ebox');
+    ebox.className = 'ebox ' + (isForbidden ? 'f' : 'p');
+    document.getElementById('eico').textContent = isForbidden ? '🚫' : '✅';
+    const elblEl = document.getElementById('elbl');
+    elblEl.textContent = isForbidden ? 'Forbidden Magic' : 'Permitted Magic';
+    elblEl.className = 'elbl ' + (isForbidden ? 'f' : 'p');
+    document.getElementById('ersn').textContent = spell.ethics_reason || '';
+  } else {
+    ethW.style.display = 'none';
+  }
+
+  // Spell identification panel
+  const spP = document.getElementById('sp-p');
+  spP.style.display = inv ? 'none' : 'block';
+
+  if(!inv && spell){
+    // Tags
+    const tags = document.getElementById('r-tags');
+    tags.innerHTML = '';
+    [spell.element, spell.effect_type, spell.complexity,
+      spell.glyphCount > 1 ? spell.glyphCount + ' Glyphs' : null
+    ].filter(Boolean).forEach(t=>{
+      const s=document.createElement('span');
+      s.className='tag'; s.textContent=t; tags.appendChild(s);
+    });
+
+    document.getElementById('r-name').textContent = spell.name || 'Unnamed Glyph';
+    document.getElementById('r-desc').textContent = spell.description || '—';
+
+    const lines=[];
+    if(spell.sigils_identified) lines.push('Sigil  →  '+spell.sigils_identified);
+    if(spell.signs_identified)  lines.push('Signs  →  '+spell.signs_identified);
+    if(spell.stability_note)    lines.push(spell.stability_note);
+    document.getElementById('r-parts').textContent = lines.join('\n\n');
+
+    const missEl = document.getElementById('r-miss');
+    const miss = spell.missing_elements || '';
+    if(miss.length > 2 && !/^(n\/a|none|complete|well.formed)/i.test(miss)){
+      missEl.style.display='block';
+      missEl.textContent='⚠ '+miss;
+    } else {
+      missEl.style.display='none';
+    }
+
+    const loreEl = document.getElementById('r-lore');
+    if(spell.lore_note && spell.lore_note.length > 3){
+      loreEl.style.display='block';
+      loreEl.textContent='"'+spell.lore_note+'"';
+    } else {
+      loreEl.style.display='none';
+    }
+  }
+}
+
+function setSc(id, val){
+  const v=Math.max(0,Math.min(100,Math.round(val||0)));
+  const f=document.getElementById('b'+id);
+  const n=document.getElementById('n'+id);
+  if(f) f.style.width=v+'%';
+  if(n) n.textContent=v;
+}
+
+// ═══════════ CAST GLYPH ═══════════
+async function castGlyph() {
+  if (!S.hasDrawn || S.loading) return;
+  S.loading = true;
+  setState('l');
+
+  // Let the browser finish any remaining line rendering cycles
+  await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 50)));
+
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = S.sz * S.dpr;
+  offCanvas.height = S.sz * S.dpr;
+  const offCtx = offCanvas.getContext('2d');
+  offCtx.scale(S.dpr, S.dpr);
+  offCtx.fillStyle = '#f4f1e3';
+  offCtx.fillRect(0, 0, S.sz, S.sz);
+  offCtx.drawImage(bgC, 0, 0, S.sz, S.sz);
+  offCtx.drawImage(drC, 0, 0, S.sz, S.sz);
+
+  // base64Image — full data URL including prefix
+  const base64Image = offCanvas.toDataURL('image/png');
+  const circles = detectCircles();
+  const acc = analyzeAccuracy(circles, false);
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64Image,
+        prompt: PROMPT
+      })
+    });
+
+    if (!res.ok) throw new Error('Worker returned status ' + res.status);
+
+    const raw = await res.text();
+    
+    // Clean string response safely before parsing
+    let cleanJsonStr = raw.trim();
+    if (cleanJsonStr.includes("```")) {
+      cleanJsonStr = cleanJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+    }
+    
+    // Secondary safety: Parse JSON safely
+    const spell = JSON.parse(cleanJsonStr);
+
+    renderResult(spell, acc);
+    applyTheme(spell.element || 'Arcane');
+    spawnFx(spell.element || 'Arcane', circles);
+
+  } catch (err) {
+    console.error('Cast error:', err);
+    renderResult({
+      valid: false,
+      invalidReason: 'Connection to the Great Library failed. Check your connection and try again. (' + err.message + ')'
+    }, acc);
+    resetTheme();
+  } finally {
+    S.loading = false;
+  }
+}
+// ═══════════ CONTROLS ═══════════
+document.getElementById('btn-p').addEventListener('click',()=>{
+  S.tool='pen';
+  document.getElementById('btn-p').classList.add('on');
+  document.getElementById('btn-e').classList.remove('on');
+  drC.style.cursor='crosshair';
+});
+
+document.getElementById('btn-e').addEventListener('click',()=>{
+  S.tool='eraser';
+  document.getElementById('btn-e').classList.add('on');
+  document.getElementById('btn-p').classList.remove('on');
+  drC.style.cursor='cell';
+});
+
+document.getElementById('btn-c').addEventListener('click',()=>{
+  S.strokes=[]; S.cur=null; S.hasDrawn=false; S.loading=false;
+  S.particles=[];
+  if(S.fxId){cancelAnimationFrame(S.fxId);S.fxId=null;}
+  drX.clearRect(0,0,S.sz,S.sz);
+  fxX.clearRect(0,0,S.sz,S.sz);
+  document.getElementById('btn-cast').disabled=true;
+  setState('e'); resetTheme();
+});
+
+document.getElementById('btn-cast').addEventListener('click', castGlyph);
+
+window.addEventListener('resize', resize);
+document.addEventListener('DOMContentLoaded', ()=>{ resize(); });
+resize();
+</script>
+</body>
+</html>
