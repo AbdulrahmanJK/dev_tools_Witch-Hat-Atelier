@@ -575,6 +575,27 @@ class GrimoireApp {
       }
     }
 
+    // Code Construct Inventory (Знаки кода)
+    const invSec = document.getElementById('insp-inventory-section');
+    const invPills = document.getElementById('insp-inventory-pills');
+    const radialSigns = node.metrics.radialSigns || [];
+
+    if (invSec && invPills) {
+      if (radialSigns.length > 0) {
+        invSec.style.display = 'block';
+        invPills.innerHTML = '';
+        radialSigns.slice(0, 18).forEach((s) => {
+          const pill = document.createElement('span');
+          pill.className = 'node-link-pill';
+          const icon = s.type === 'dispersion' ? '◡' : s.type === 'convergence' ? '▽' : s.type === 'repetition' ? '◎' : s.type === 'collection' ? '⋓' : s.type === 'orb' ? '○' : s.type === 'region' ? '□' : s.type === 'bolt' ? '⚡' : '┴';
+          pill.innerHTML = `<span style="font-weight:700">${icon}</span> ${s.label}`;
+          invPills.appendChild(pill);
+        });
+      } else {
+        invSec.style.display = 'none';
+      }
+    }
+
     // 3. Internal Circuit (Inscribed Sub-Seals)
     const circuitSec = document.getElementById('insp-circuit-section');
     const circuitList = document.getElementById('insp-circuit-list');

@@ -113,7 +113,134 @@ export function calculateComponentMetrics(component, fileInfo) {
     }
   }
 
-  // 4. Determine WHA Stability & Grade
+  // 4. Synthesize Dynamic Multi-Sign Inventory for the Seal's Perimeter
+  const radialSigns = [];
+  const inv = fileInfo.codeInventory || {};
+
+  // Maps -> Dispersion (size scales with callback LOC)
+  (inv.maps || []).forEach((mLoc) => {
+    radialSigns.push({
+      type: 'dispersion',
+      size: Math.max(9, Math.min(20, 9 + Math.sqrt(mLoc) * 2.0)),
+      loc: mLoc,
+      label: `.map() (${mLoc}L)`,
+    });
+  });
+
+  // Filters -> Convergence (size scales with predicate LOC)
+  (inv.filters || []).forEach((fLoc) => {
+    radialSigns.push({
+      type: 'convergence',
+      size: Math.max(9, Math.min(20, 9 + Math.sqrt(fLoc) * 2.0)),
+      loc: fLoc,
+      label: `.filter() (${fLoc}L)`,
+    });
+  });
+
+  // Reduces -> Convergence
+  (inv.reduces || []).forEach((rLoc) => {
+    radialSigns.push({
+      type: 'convergence',
+      size: Math.max(10, Math.min(22, 10 + Math.sqrt(rLoc) * 2.2)),
+      loc: rLoc,
+      label: `.reduce() (${rLoc}L)`,
+    });
+  });
+
+  // Loops & forEach -> Repetition
+  (inv.loops || []).forEach((lLoc) => {
+    radialSigns.push({
+      type: 'repetition',
+      size: Math.max(10, Math.min(22, 10 + Math.sqrt(lLoc) * 2.0)),
+      loc: lLoc,
+      label: `Loop (${lLoc}L)`,
+    });
+  });
+
+  (inv.forEaches || []).forEach((feLoc) => {
+    radialSigns.push({
+      type: 'repetition',
+      size: Math.max(9, Math.min(20, 9 + Math.sqrt(feLoc) * 1.8)),
+      loc: feLoc,
+      label: `.forEach() (${feLoc}L)`,
+    });
+  });
+
+  // useEffect hooks -> Repetition
+  hooks.filter((h) => ['useEffect', 'useLayoutEffect'].includes(h.name)).forEach(() => {
+    radialSigns.push({
+      type: 'repetition',
+      size: 13,
+      loc: 8,
+      label: 'useEffect',
+    });
+  });
+
+  // Arrays (Collections) -> Canonical Collection / Gather sign
+  if (inv.arrays > 0) {
+    const arrSignsCount = Math.min(3, Math.max(1, Math.floor(inv.arrays / 6)));
+    for (let i = 0; i < arrSignsCount; i++) {
+      radialSigns.push({
+        type: 'collection',
+        size: Math.max(10, Math.min(20, 10 + Math.sqrt(inv.arrays) * 1.4)),
+        loc: inv.arrays,
+        label: `${inv.arrays} Arrays`,
+      });
+    }
+  }
+
+  // Sets -> Canonical Orb / Vessel sign
+  if (inv.sets > 0) {
+    for (let i = 0; i < Math.min(3, inv.sets); i++) {
+      radialSigns.push({
+        type: 'orb',
+        size: 13,
+        loc: 1,
+        label: 'new Set()',
+      });
+    }
+  }
+
+  // Maps -> Canonical Region / Window sign
+  if (inv.recordMaps > 0) {
+    for (let i = 0; i < Math.min(3, inv.recordMaps); i++) {
+      radialSigns.push({
+        type: 'region',
+        size: 13,
+        loc: 1,
+        label: 'new Map()',
+      });
+    }
+  }
+
+  // Async / Await -> Bolt sign
+  if (inv.asyncCount > 0) {
+    const boltCount = Math.min(3, Math.max(1, Math.floor(inv.asyncCount / 3)));
+    for (let i = 0; i < boltCount; i++) {
+      radialSigns.push({
+        type: 'bolt',
+        size: Math.max(10, Math.min(18, 10 + Math.sqrt(inv.asyncCount) * 1.6)),
+        loc: inv.asyncCount,
+        label: `${inv.asyncCount} Await`,
+      });
+    }
+  }
+
+  // Internal Helper Functions -> Column sign
+  (component.internalCircuit?.handlers || []).slice(0, 3).forEach((h) => {
+    radialSigns.push({
+      type: 'column',
+      size: Math.max(9, Math.min(20, 9 + Math.sqrt(h.loc) * 1.8)),
+      loc: h.loc,
+      label: `${h.name} (${h.loc}L)`,
+    });
+  });
+
+  // Classes get faceted hexagonal Strengthen geometry
+  const isClass = !!inv.isClass || component.kind === 'class';
+  const geometry = isClass ? 'faceted-strengthen' : 'circle';
+
+  // 5. Determine WHA Stability & Grade
   let grade = 'Master Seal';
   let stabilityNote = 'Harmonious lines, balanced energy circulation.';
   const isForbidden = antiPatterns.length > 0;
@@ -140,6 +267,9 @@ export function calculateComponentMetrics(component, fileInfo) {
     element: dominantElement,
     keystones: Array.from(keystones),
     keystoneDetails,
+    radialSigns,
+    geometry,
+    isClass,
     grade,
     stabilityNote,
     isForbidden,
