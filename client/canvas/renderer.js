@@ -473,7 +473,6 @@ export class WorldRenderer {
       const isSelected = !isArt && node.id === this.selectedNodeId;
       const isHovered = !isArt && !this.selectedNodeId && node.id === this.hoveredNodeId;
       const isLineageNode = !isArt && this.lineageNodeIds && this.lineageNodeIds.has(node.id);
-      const isDimmed = activeNodeId && !connectedNodeIds.has(node.id) && !isLineageNode;
 
       // Draw subtle golden lineage aura on parent/child nodes in the transition chain
       if (isLineageNode && !isSelected && !isHovered) {
@@ -489,9 +488,7 @@ export class WorldRenderer {
       }
 
       ctx.save();
-      if (isDimmed) {
-        ctx.globalAlpha = 0.22;
-      }
+      ctx.globalAlpha = 1.0; // Keep ALL nodes 100% visible and clear! No washed-out dimming!
 
       // Create proxy with active positioning
       const drawNodeProxy = {
@@ -568,8 +565,13 @@ export class WorldRenderer {
         let hitSubSeal = null;
         if (node.realisticLayout?.subSeals) {
           for (const sub of node.realisticLayout.subSeals) {
-            const subDist = Math.hypot(worldPos.x - (pos.x + sub.dx), worldPos.y - (pos.y + sub.dy));
-            if (subDist <= sub.radius) {
+            const d = sub.distRatio !== undefined ? pos.r * sub.distRatio : (sub.dx ? Math.hypot(sub.dx, sub.dy) : 0);
+            const a = sub.angle !== undefined ? sub.angle : (sub.dx ? Math.atan2(sub.dy, sub.dx) : 0);
+            const sx = Math.round(Math.cos(a) * d);
+            const sy = Math.round(Math.sin(a) * d);
+            const sr = sub.radiusRatio !== undefined ? Math.max(6, Math.round(pos.r * sub.radiusRatio)) : (sub.radius || 12);
+            const subDist = Math.hypot(worldPos.x - (pos.x + sx), worldPos.y - (pos.y + sy));
+            if (subDist <= sr) {
               hitSubSeal = sub;
               break;
             }

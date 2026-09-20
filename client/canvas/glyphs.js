@@ -107,10 +107,10 @@ export class GlyphRenderer {
 
   // ═══════════ MONOCHROME ART BLUEPRINT MODE (ЧЕРНО-БЕЛЫЙ ЧЕРТЕЖ КАК НА КАРТИНКЕ) ═══════════
   renderArtBlueprintSeal(ctx, node, lod) {
-    const layout = node.realisticLayout || { realisticRadius: node.metrics.radius, subSeals: [], conduits: [] };
-    const r = layout.realisticRadius;
-    const chamberR = layout.chamberRadius || Math.round(r * 0.60);
-    const keystoneR = layout.keystoneRadius || Math.round(r * 0.82);
+    const layout = node.realisticLayout || { subSeals: [], conduits: [] };
+    const r = node.metrics?.radius || layout.realisticRadius || 45;
+    const chamberR = Math.round(r * 0.64);
+    const keystoneR = Math.round(r * 0.81);
     const ink = '#141311';
 
     ctx.save();
@@ -121,20 +121,20 @@ export class GlyphRenderer {
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.0;
+      ctx.lineWidth = 1.8;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(0, 0, 2, 0, Math.PI * 2);
+      ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = ink;
       ctx.fill();
       ctx.restore();
       return;
     }
 
-    // Translucent antique drawing paper base so overlapping intersecting rings show their crossing arcs
+    // Solid paper background - crisp, clean, opaque!
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(251, 249, 242, 0.72)';
+    ctx.fillStyle = '#faf8f0';
     ctx.fill();
 
     // 1. Faceted Hexagonal Strengthen Ring for Class Components, or fine quill circular ring
@@ -142,7 +142,7 @@ export class GlyphRenderer {
     if (isClass) {
       this.drawFacetedStrengthenRing(ctx, r, WHA_THEMES.Mono, lod);
     } else {
-      const ringWidth = r > 250 ? 2.2 : r > 80 ? 1.4 : 1.0;
+      const ringWidth = r > 250 ? 3.4 : r > 80 ? 2.4 : 1.8;
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.strokeStyle = ink;
@@ -151,9 +151,9 @@ export class GlyphRenderer {
 
       // Guideline circle for keystone orbit
       ctx.beginPath();
-      ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
-      ctx.lineWidth = 0.7;
+      ctx.arc(0, 0, r * 0.90, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+      ctx.lineWidth = 1.0;
       ctx.stroke();
     }
 
@@ -161,9 +161,9 @@ export class GlyphRenderer {
     if (layout.subSeals && layout.subSeals.length > 1) {
       ctx.beginPath();
       ctx.arc(0, 0, chamberR, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(20, 19, 17, 0.40)';
-      ctx.lineWidth = 0.9;
-      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -177,17 +177,17 @@ export class GlyphRenderer {
     // 4. Central Canonical Sigil or Inscribed Sub-Seals inside chamber
     if (layout.subSeals && layout.subSeals.length > 1 && lod >= 2) {
       // Conduits inside chamber
-      this.drawArtConduits(ctx, layout.subSeals, layout.conduits);
+      this.drawArtConduits(ctx, layout.subSeals, layout.conduits, r);
       // Inscribed Sub-Seals (NO text in Art Mode!)
       layout.subSeals.forEach((sub) => {
-        this.drawArtSubSeal(ctx, sub, lod, false);
+        this.drawArtSubSeal(ctx, sub, r, lod, false);
       });
     } else {
       // Center: exact canonical vector sigil
       const sigilSize = Math.max(12, chamberR * 0.50);
       ctx.strokeStyle = ink;
       ctx.fillStyle = ink;
-      ctx.lineWidth = r > 100 ? 1.8 : 1.1;
+      ctx.lineWidth = r > 100 ? 2.4 : 1.8;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -308,12 +308,15 @@ export class GlyphRenderer {
   }
 
   // ═══════════ TECHNICAL ART CONDUITS ═══════════
-  drawArtConduits(ctx, subSeals, conduits) {
+  drawArtConduits(ctx, subSeals, conduits, parentR) {
     if (!conduits || conduits.length === 0) return;
     const subMap = new Map();
     subSeals.forEach((s) => {
-      subMap.set(s.type, s);
-      subMap.set(s.id.split('#')[1], s);
+      const d = s.distRatio !== undefined ? parentR * s.distRatio : (s.dx ? Math.hypot(s.dx, s.dy) : 0);
+      const a = s.angle !== undefined ? s.angle : (s.dx ? Math.atan2(s.dy, s.dx) : 0);
+      const pos = { x: Math.round(Math.cos(a) * d), y: Math.round(Math.sin(a) * d) };
+      subMap.set(s.type, pos);
+      subMap.set(s.id.split('#')[1], pos);
     });
 
     conduits.forEach((c) => {
@@ -321,22 +324,22 @@ export class GlyphRenderer {
       const s2 = subMap.get(c.to);
       if (!s1 || !s2) return;
 
-      const dx = s2.dx - s1.dx;
-      const dy = s2.dy - s1.dy;
+      const dx = s2.x - s1.x;
+      const dy = s2.y - s1.y;
       const dist = Math.hypot(dx, dy);
       if (dist < 5) return;
 
       const normalX = -dy / dist;
       const normalY = dx / dist;
       const curve = Math.min(22, dist * 0.16);
-      const mx = (s1.dx + s2.dx) / 2 + normalX * curve;
-      const my = (s1.dy + s2.dy) / 2 + normalY * curve;
+      const mx = (s1.x + s2.x) / 2 + normalX * curve;
+      const my = (s1.y + s2.y) / 2 + normalY * curve;
 
       // Drafting construction line
       ctx.beginPath();
-      ctx.moveTo(s1.dx, s1.dy);
-      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
-      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+      ctx.moveTo(s1.x, s1.y);
+      ctx.quadraticCurveTo(mx, my, s2.x, s2.y);
+      ctx.strokeStyle = '#141311';
       ctx.lineWidth = 1.4;
       ctx.stroke();
 
@@ -350,19 +353,24 @@ export class GlyphRenderer {
 
       // Terminal junction dots
       ctx.beginPath();
-      ctx.arc(s1.dx, s1.dy, 2.2, 0, Math.PI * 2);
-      ctx.arc(s2.dx, s2.dy, 2.2, 0, Math.PI * 2);
+      ctx.arc(s1.x, s1.y, 2.2, 0, Math.PI * 2);
+      ctx.arc(s2.x, s2.y, 2.2, 0, Math.PI * 2);
       ctx.fillStyle = '#141311';
       ctx.fill();
     });
   }
 
   // ═══════════ INSCRIBED ART SUB-SEAL (ЧЕРНО-БЕЛЫЙ ПОД-КРУГ) ═══════════
-  drawArtSubSeal(ctx, sub, lod, showText = false) {
-    ctx.save();
-    ctx.translate(sub.dx, sub.dy);
-    const sr = sub.radius;
+  drawArtSubSeal(ctx, sub, parentR, lod, showText = false) {
+    const d = sub.distRatio !== undefined ? parentR * sub.distRatio : (sub.dx ? Math.hypot(sub.dx, sub.dy) : 0);
+    const a = sub.angle !== undefined ? sub.angle : (sub.dx ? Math.atan2(sub.dy, sub.dx) : 0);
+    const sx = Math.round(Math.cos(a) * d);
+    const sy = Math.round(Math.sin(a) * d);
+    const sr = sub.radiusRatio !== undefined ? Math.max(6, Math.round(parentR * sub.radiusRatio)) : (sub.radius || 12);
     const ink = '#141311';
+
+    ctx.save();
+    ctx.translate(sx, sy);
 
     // Sub-seal background: crisp parchment white
     ctx.beginPath();
@@ -374,23 +382,23 @@ export class GlyphRenderer {
     ctx.beginPath();
     ctx.arc(0, 0, sr, 0, Math.PI * 2);
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.8;
     ctx.stroke();
 
     ctx.beginPath();
     ctx.arc(0, 0, sr - 3.0, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.55)';
+    ctx.lineWidth = 1.0;
     ctx.stroke();
 
     // 4 Cardinal ticks
     for (let i = 0; i < 4; i++) {
-      const a = (i * Math.PI) / 2;
+      const ca = (i * Math.PI) / 2;
       ctx.beginPath();
-      ctx.moveTo((sr - 1) * Math.cos(a), (sr - 1) * Math.sin(a));
-      ctx.lineTo((sr - 4) * Math.cos(a), (sr - 4) * Math.sin(a));
+      ctx.moveTo((sr - 1) * Math.cos(ca), (sr - 1) * Math.sin(ca));
+      ctx.lineTo((sr - 4) * Math.cos(ca), (sr - 4) * Math.sin(ca));
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.1;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
     }
 
@@ -492,9 +500,11 @@ export class GlyphRenderer {
   }
 
   // ═══════════ REALISTIC COMPOUND NESTED SEAL RENDERER ═══════════
-  renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered) {
-    const layout = node.realisticLayout;
-    const r = layout.realisticRadius;
+  renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered, isLineageNode = false) {
+    const layout = node.realisticLayout || { subSeals: [], conduits: [] };
+    const r = node.metrics?.radius || layout.realisticRadius || 50;
+    const chamberR = Math.round(r * 0.64);
+    const keystoneR = Math.round(r * 0.81);
     const element = node.metrics.element || 'Arcane';
     const theme = WHA_THEMES[element] || WHA_THEMES.Arcane;
 
@@ -533,9 +543,6 @@ export class GlyphRenderer {
     ctx.fillStyle = '#f8f5eb';
     ctx.fill();
 
-    const chamberR = layout.chamberRadius || Math.round(r * 0.60);
-    const keystoneR = layout.keystoneRadius || Math.round(r * 0.82);
-
     // 1. Triple Compound Gear-Toothed Outer Ring OR Faceted Strengthen Hexagon for Classes
     const isClass = node.metrics?.geometry === 'faceted-strengthen' || node.metrics?.isClass;
     if (isClass) {
@@ -562,18 +569,18 @@ export class GlyphRenderer {
     }
 
     // 4. Internal Conduits (Energy Pathways between sub-seals)
-    this.drawInternalConduits(ctx, layout.subSeals, layout.conduits, theme);
+    this.drawInternalConduits(ctx, layout.subSeals, layout.conduits, theme, r);
 
     // 5. Render Each Inscribed Sub-Seal strictly inside chamber with Text Visibility Rule
     const showSubText = isSelected || isLineageNode;
     layout.subSeals.forEach((sub) => {
-      this.drawSubSeal(ctx, sub, lod, theme, showSubText);
+      this.drawSubSeal(ctx, sub, r, lod, theme, showSubText);
     });
 
-    // 4. Mother Seal Title Banner
+    // 6. Mother Seal Title Banner
     this.drawLabels(ctx, r, node, lod, isSelected || isHovered);
 
-    // 5. Overcharged Cracks / Forbidden Glaives
+    // 7. Overcharged Cracks / Forbidden Glaives
     if (node.metrics.isForbidden) {
       this.drawForbiddenMarks(ctx, r);
     } else if (node.metrics.grade === 'Overcharged Monolith') {
@@ -715,13 +722,15 @@ export class GlyphRenderer {
   }
 
   // ═══════════ INTERNAL DATA CONDUITS ═══════════
-  drawInternalConduits(ctx, subSeals, conduits, theme) {
+  drawInternalConduits(ctx, subSeals, conduits, theme, parentR = 100) {
     if (!conduits || conduits.length === 0) return;
     const subMap = new Map();
     subSeals.forEach((s) => {
-      // Map by id or type
-      subMap.set(s.type, s);
-      subMap.set(s.id.split('#')[1], s);
+      const d = s.distRatio !== undefined ? parentR * s.distRatio : (s.dx ? Math.hypot(s.dx, s.dy) : 0);
+      const a = s.angle !== undefined ? s.angle : (s.dx ? Math.atan2(s.dy, s.dx) : 0);
+      const pos = { x: Math.round(Math.cos(a) * d), y: Math.round(Math.sin(a) * d) };
+      subMap.set(s.type, pos);
+      subMap.set(s.id.split('#')[1], pos);
     });
 
     conduits.forEach((c) => {
@@ -729,43 +738,43 @@ export class GlyphRenderer {
       const s2 = subMap.get(c.to);
       if (!s1 || !s2) return;
 
-      const dx = s2.dx - s1.dx;
-      const dy = s2.dy - s1.dy;
+      const dx = s2.x - s1.x;
+      const dy = s2.y - s1.y;
       const dist = Math.hypot(dx, dy);
       if (dist < 5) return;
 
-      // Curved ink thread
       const normalX = -dy / dist;
       const normalY = dx / dist;
-      const curve = Math.min(25, dist * 0.18);
-      const mx = (s1.dx + s2.dx) / 2 + normalX * curve;
-      const my = (s1.dy + s2.dy) / 2 + normalY * curve;
+      const curve = Math.min(22, dist * 0.16);
+      const mx = (s1.x + s2.x) / 2 + normalX * curve;
+      const my = (s1.y + s2.y) / 2 + normalY * curve;
 
       ctx.beginPath();
-      ctx.moveTo(s1.dx, s1.dy);
-      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
-      ctx.strokeStyle = 'rgba(26, 25, 22, 0.28)';
+      ctx.moveTo(s1.x, s1.y);
+      ctx.quadraticCurveTo(mx, my, s2.x, s2.y);
+      ctx.strokeStyle = theme.stroke || 'rgba(26, 25, 22, 0.45)';
       ctx.lineWidth = 1.4;
       ctx.stroke();
 
-      // Golden energy pulse core
       ctx.beginPath();
-      ctx.moveTo(s1.dx, s1.dy);
-      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
-      ctx.strokeStyle = theme.stroke;
-      ctx.lineWidth = 1.0;
-      ctx.setLineDash([4, 6]);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.arc(s1.x, s1.y, 2.0, 0, Math.PI * 2);
+      ctx.arc(s2.x, s2.y, 2.0, 0, Math.PI * 2);
+      ctx.fillStyle = theme.stroke || '#141311';
+      ctx.fill();
     });
   }
 
   // ═══════════ INSCRIBED SUB-SEALS ═══════════
-  drawSubSeal(ctx, sub, lod, parentTheme) {
+  drawSubSeal(ctx, sub, parentR = 100, lod = 1, parentTheme = null, showText = false) {
+    const d = sub.distRatio !== undefined ? parentR * sub.distRatio : (sub.dx ? Math.hypot(sub.dx, sub.dy) : 0);
+    const a = sub.angle !== undefined ? sub.angle : (sub.dx ? Math.atan2(sub.dy, sub.dx) : 0);
+    const sx = Math.round(Math.cos(a) * d);
+    const sy = Math.round(Math.sin(a) * d);
+    const sr = sub.radiusRatio !== undefined ? Math.max(6, Math.round(parentR * sub.radiusRatio)) : (sub.radius || 12);
+
     ctx.save();
-    ctx.translate(sub.dx, sub.dy);
-    const sr = sub.radius;
-    const subTheme = WHA_THEMES[sub.element] || parentTheme;
+    ctx.translate(sx, sy);
+    const subTheme = WHA_THEMES[sub.element] || parentTheme || WHA_THEMES.Arcane;
 
     // Sub-seal background parchment tint
     ctx.beginPath();
