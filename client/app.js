@@ -12,6 +12,7 @@ class GrimoireApp {
     this.graphData = null;
     this.allNodes = [];
     this.activeFilter = 'all';
+    this.realisticMode = false;
 
     this.drawer = document.getElementById('inspector-drawer');
     this.searchBox = document.getElementById('node-search');
@@ -109,9 +110,10 @@ class GrimoireApp {
       const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
       if (moved < 5) {
         // Pure click (not drag pan)
-        const hitNode = this.renderer.findNodeAt(e.clientX, e.clientY);
-        if (hitNode) {
-          this.selectNode(hitNode);
+        const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
+        if (hit) {
+          const node = hit.node || hit;
+          this.selectNode(node, hit.hitSubSeal);
         } else {
           this.deselect();
         }
@@ -120,10 +122,25 @@ class GrimoireApp {
 
     this.viewport.addEventListener('pointermove', (e) => {
       if (this.camera.isDragging) return;
-      const hitNode = this.renderer.findNodeAt(e.clientX, e.clientY);
-      this.renderer.hoveredNodeId = hitNode ? hitNode.id : null;
-      this.viewport.style.cursor = hitNode ? 'pointer' : 'grab';
+      const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
+      const node = hit ? (hit.node || hit) : null;
+      this.renderer.hoveredNodeId = node ? node.id : null;
+      this.viewport.style.cursor = node ? 'pointer' : 'grab';
     });
+
+    // Realistic Mode Toggle
+    const toggleRealBtn = document.getElementById('btn-toggle-realistic');
+    if (toggleRealBtn) {
+      toggleRealBtn.addEventListener('click', () => {
+        this.realisticMode = !this.realisticMode;
+        toggleRealBtn.classList.toggle('active', this.realisticMode);
+        this.renderer.setRealisticMode(this.realisticMode);
+        if (this.renderer.selectedNodeId) {
+          const selNode = this.allNodes.find((n) => n.id === this.renderer.selectedNodeId);
+          if (selNode) this.openInspector(selNode);
+        }
+      });
+    }
 
     // Zoom Buttons
     document.getElementById('btn-zoom-in').addEventListener('click', () => {
@@ -199,9 +216,9 @@ class GrimoireApp {
     }
   }
 
-  selectNode(node) {
+  selectNode(node, hitSubSeal = null) {
     this.renderer.selectedNodeId = node.id;
-    this.openInspector(node);
+    this.openInspector(node, hitSubSeal);
   }
 
   deselect() {
@@ -209,7 +226,7 @@ class GrimoireApp {
     this.drawer.classList.remove('open');
   }
 
-  openInspector(node) {
+  openInspector(node, hitSubSeal = null) {
     const theme = WHA_THEMES[node.metrics.element] || WHA_THEMES.Arcane;
 
     // Header values
@@ -233,6 +250,36 @@ class GrimoireApp {
     stabCard.className = 'stability-card' + (isForbidden ? ' forbidden' : '');
     document.getElementById('insp-stability-grade').textContent = node.metrics.grade;
     document.getElementById('insp-stability-note').textContent = node.metrics.stabilityNote;
+
+    // Internal Circuit (Inscribed Sub-Seals)
+    const circuitSec = document.getElementById('insp-circuit-section');
+    const circuitList = document.getElementById('insp-circuit-list');
+    const subSeals = node.realisticLayout?.subSeals || [];
+
+    if (subSeals.length > 0) {
+      circuitSec.style.display = 'block';
+      circuitList.innerHTML = '';
+
+      subSeals.forEach((sub) => {
+        const card = document.createElement('div');
+        const isTarget = hitSubSeal && (hitSubSeal.id === sub.id || hitSubSeal.name === sub.name);
+        card.className = 'circuit-sub-seal-card' + (isTarget ? ' highlight' : '');
+
+        const icon = sub.type === 'core' ? '▲' : sub.type === 'state' ? '◇' : sub.type === 'effects' ? '◎' : sub.type === 'handler' ? '┴' : '∧';
+        const varsText = sub.details && sub.details.length > 0 ? sub.details.join(', ') : 'Inscribed node';
+
+        card.innerHTML = `
+          <div class="sub-seal-title">
+            <span>${icon} ${sub.name}</span>
+            <span style="font-size:0.62rem;text-transform:uppercase;color:var(--ink-secondary)">${sub.type}</span>
+          </div>
+          <div class="sub-seal-vars">${varsText}</div>
+        `;
+        circuitList.appendChild(card);
+      });
+    } else {
+      circuitSec.style.display = 'none';
+    }
 
     // Keystones list
     const kList = document.getElementById('insp-keystones-list');

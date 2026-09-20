@@ -1,7 +1,10 @@
+import { NestedPacker } from './nestedPacker.js';
+
 export class ClusterLayout {
   constructor(options = {}) {
     this.padding = options.padding || 36;
     this.clusterSpacing = options.clusterSpacing || 380;
+    this.nestedPacker = new NestedPacker();
   }
 
   computeLayout(graph) {
@@ -29,6 +32,12 @@ export class ClusterLayout {
 
       // Pack nodes around cluster center
       const positioned = this.packClusterNodes(cNodes, cCenter);
+
+      // Compute Realistic Mode internal sub-seals for each node
+      positioned.nodes.forEach((n) => {
+        n.realisticLayout = this.nestedPacker.packComponentInternalSeals(n);
+      });
+
       layoutNodes.push(...positioned.nodes);
 
       layoutClusters.push({

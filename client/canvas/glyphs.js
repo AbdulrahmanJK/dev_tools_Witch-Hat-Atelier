@@ -20,7 +20,12 @@ export class GlyphRenderer {
   }
 
   // ═══════════ MAIN NODE RENDERER ═══════════
-  renderNode(ctx, node, lod, isSelected, isHovered) {
+  renderNode(ctx, node, lod, isSelected, isHovered, realisticMode = false) {
+    if (realisticMode && node.realisticLayout && node.realisticLayout.subSeals?.length > 0) {
+      this.renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered);
+      return;
+    }
+
     const x = node.x;
     const y = node.y;
     const r = node.metrics.radius;
@@ -91,6 +96,281 @@ export class GlyphRenderer {
       this.drawForbiddenMarks(ctx, r);
     } else if (node.metrics.grade === 'Overcharged Monolith') {
       this.drawOverchargedCracks(ctx, r);
+    }
+
+    ctx.restore();
+  }
+
+  // ═══════════ REALISTIC COMPOUND NESTED SEAL RENDERER ═══════════
+  renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered) {
+    const layout = node.realisticLayout;
+    const r = layout.realisticRadius;
+    const element = node.metrics.element || 'Arcane';
+    const theme = WHA_THEMES[element] || WHA_THEMES.Arcane;
+
+    ctx.save();
+    ctx.translate(node.x, node.y);
+
+    if (lod === 0) {
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = theme.stroke;
+      ctx.globalAlpha = isHovered || isSelected ? 0.85 : 0.5;
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // Aura on selection or hover
+    if (isSelected || isHovered) {
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 16, 0, Math.PI * 2);
+      ctx.fillStyle = theme.glow;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = 2.4;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Fill Mother Seal parchment body
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#f8f5eb';
+    ctx.fill();
+
+    // 1. Triple Compound Gear-Toothed Outer Ring
+    this.drawCompoundGearRing(ctx, r, theme, lod);
+
+    // 2. Internal Conduits (Energy Pathways between sub-seals)
+    this.drawInternalConduits(ctx, layout.subSeals, layout.conduits, theme);
+
+    // 3. Render Each Inscribed Sub-Seal
+    layout.subSeals.forEach((sub) => {
+      this.drawSubSeal(ctx, sub, lod, theme);
+    });
+
+    // 4. Mother Seal Title Banner
+    this.drawLabels(ctx, r, node, lod, isSelected || isHovered);
+
+    // 5. Overcharged Cracks / Forbidden Glaives
+    if (node.metrics.isForbidden) {
+      this.drawForbiddenMarks(ctx, r);
+    } else if (node.metrics.grade === 'Overcharged Monolith') {
+      this.drawOverchargedCracks(ctx, r);
+    }
+
+    ctx.restore();
+  }
+
+  // ═══════════ TRIPLE COMPOUND GEAR RING ═══════════
+  drawCompoundGearRing(ctx, r, theme, lod) {
+    // Outer primary circuit
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = this.inkColor;
+    ctx.lineWidth = 3.6;
+    ctx.stroke();
+
+    // Middle gear-toothed track
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 7, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(26, 25, 22, 0.55)';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // 32 Clockwork / runic teeth between outer and middle ring
+    for (let i = 0; i < 32; i++) {
+      const a = (i * Math.PI * 2) / 32;
+      const isCard = i % 4 === 0;
+      ctx.beginPath();
+      ctx.moveTo((r - 2) * Math.cos(a), (r - 2) * Math.sin(a));
+      ctx.lineTo((r - (isCard ? 14 : 7)) * Math.cos(a), (r - (isCard ? 14 : 7)) * Math.sin(a));
+      ctx.strokeStyle = this.inkColor;
+      ctx.lineWidth = isCard ? 2.6 : 1.2;
+      ctx.stroke();
+    }
+
+    // Inner boundary ring
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 15, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(26, 25, 22, 0.35)';
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash([3, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 8 Cardinal Arrowhead Spikes extending outward
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4;
+      const isMajor = i % 2 === 0;
+      const len = isMajor ? 18 : 10;
+      const sx = (r - 2) * Math.cos(a);
+      const sy = (r - 2) * Math.sin(a);
+      const ex = (r + len) * Math.cos(a);
+      const ey = (r + len) * Math.sin(a);
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = isMajor ? 2.4 : 1.6;
+      ctx.stroke();
+    }
+  }
+
+  // ═══════════ INTERNAL DATA CONDUITS ═══════════
+  drawInternalConduits(ctx, subSeals, conduits, theme) {
+    if (!conduits || conduits.length === 0) return;
+    const subMap = new Map();
+    subSeals.forEach((s) => {
+      // Map by id or type
+      subMap.set(s.type, s);
+      subMap.set(s.id.split('#')[1], s);
+    });
+
+    conduits.forEach((c) => {
+      const s1 = subMap.get(c.from);
+      const s2 = subMap.get(c.to);
+      if (!s1 || !s2) return;
+
+      const dx = s2.dx - s1.dx;
+      const dy = s2.dy - s1.dy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 5) return;
+
+      // Curved ink thread
+      const normalX = -dy / dist;
+      const normalY = dx / dist;
+      const curve = Math.min(25, dist * 0.18);
+      const mx = (s1.dx + s2.dx) / 2 + normalX * curve;
+      const my = (s1.dy + s2.dy) / 2 + normalY * curve;
+
+      ctx.beginPath();
+      ctx.moveTo(s1.dx, s1.dy);
+      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
+      ctx.strokeStyle = 'rgba(26, 25, 22, 0.28)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      // Golden energy pulse core
+      ctx.beginPath();
+      ctx.moveTo(s1.dx, s1.dy);
+      ctx.quadraticCurveTo(mx, my, s2.dx, s2.dy);
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = 1.0;
+      ctx.setLineDash([4, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  // ═══════════ INSCRIBED SUB-SEALS ═══════════
+  drawSubSeal(ctx, sub, lod, parentTheme) {
+    ctx.save();
+    ctx.translate(sub.dx, sub.dy);
+    const sr = sub.radius;
+    const subTheme = WHA_THEMES[sub.element] || parentTheme;
+
+    // Sub-seal background parchment tint
+    ctx.beginPath();
+    ctx.arc(0, 0, sr, 0, Math.PI * 2);
+    ctx.fillStyle = subTheme.bg || '#fbf9f2';
+    ctx.fill();
+
+    // Outer ring of sub-seal
+    ctx.beginPath();
+    ctx.arc(0, 0, sr, 0, Math.PI * 2);
+    ctx.strokeStyle = this.inkColor;
+    ctx.lineWidth = 2.0;
+    ctx.stroke();
+
+    // Inner ring
+    ctx.beginPath();
+    ctx.arc(0, 0, sr - 3.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(26, 25, 22, 0.45)';
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+
+    // 4 Cardinal ticks on sub-seal
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      ctx.beginPath();
+      ctx.moveTo((sr - 1) * Math.cos(a), (sr - 1) * Math.sin(a));
+      ctx.lineTo((sr - 5) * Math.cos(a), (sr - 5) * Math.sin(a));
+      ctx.strokeStyle = this.inkColor;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+
+    // Micro-Sigil / Keystone in Center of Sub-seal
+    if (sub.type === 'core') {
+      this.drawSigil(ctx, 0, 0, sr * 0.65, sub.element, subTheme);
+    } else if (sub.type === 'state') {
+      // Diamond / Light micro-sigil
+      const ds = sr * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(0, -ds);
+      ctx.lineTo(ds, 0);
+      ctx.lineTo(0, ds);
+      ctx.lineTo(-ds, 0);
+      ctx.closePath();
+      ctx.strokeStyle = subTheme.stroke;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    } else if (sub.type === 'effects') {
+      // Repetition concentric circles with pupil
+      ctx.beginPath();
+      ctx.arc(0, 0, sr * 0.40, 0, Math.PI * 2);
+      ctx.strokeStyle = subTheme.stroke;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = subTheme.stroke;
+      ctx.fill();
+    } else if (sub.type === 'handler') {
+      // Column inverted T
+      const ts = sr * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(0, -ts);
+      ctx.lineTo(0, ts * 0.8);
+      ctx.moveTo(-ts * 0.6, ts * 0.8);
+      ctx.lineTo(ts * 0.6, ts * 0.8);
+      ctx.strokeStyle = subTheme.stroke;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    } else if (sub.type === 'child') {
+      // Chevron Direction
+      const cs = sr * 0.38;
+      ctx.beginPath();
+      ctx.moveTo(-cs, cs * 0.6);
+      ctx.lineTo(0, -cs * 0.6);
+      ctx.lineTo(cs, cs * 0.6);
+      ctx.strokeStyle = subTheme.stroke;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+
+    // Sub-seal labels (LOD >= 1)
+    if (lod >= 1) {
+      ctx.textAlign = 'center';
+      const fSize = Math.max(8, Math.min(11, sr * 0.22));
+      ctx.font = `600 ${fSize}px 'Palatino Linotype', Palatino, serif`;
+      ctx.fillStyle = '#1c1b18';
+      ctx.fillText(sub.name, 0, sr + 10);
+
+      // Micro details below
+      if (lod >= 2 && sub.details && sub.details.length > 0) {
+        ctx.font = `italic 500 ${fSize * 0.88}px 'Palatino Linotype', Palatino, serif`;
+        ctx.fillStyle = 'rgba(26, 25, 22, 0.70)';
+        const topDetail = sub.details[0];
+        ctx.fillText(topDetail, 0, sr + 21);
+      }
     }
 
     ctx.restore();
