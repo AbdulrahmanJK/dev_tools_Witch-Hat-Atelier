@@ -26,6 +26,12 @@ export class WorldRenderer {
       labels: true,
       reduxVeins: true,
     };
+
+    this.realisticMode = false;
+  }
+
+  setRealisticMode(enabled) {
+    this.realisticMode = !!enabled;
   }
 
   setData(data) {
@@ -205,7 +211,7 @@ export class WorldRenderer {
     }
 
     for (const node of this.nodes) {
-      const r = node.metrics.radius;
+      const r = this.realisticMode && node.realisticLayout ? node.realisticLayout.realisticRadius : node.metrics.radius;
 
       // Viewport culling: Skip nodes outside visible screen!
       if (node.x + r + 40 < vp.minX || node.x - r - 40 > vp.maxX || node.y + r + 40 < vp.minY || node.y - r - 40 > vp.maxY) {
@@ -221,7 +227,7 @@ export class WorldRenderer {
         ctx.globalAlpha = 0.22;
       }
 
-      this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered);
+      this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered, this.realisticMode);
       ctx.restore();
     }
   }
@@ -231,9 +237,21 @@ export class WorldRenderer {
     // Search in reverse so top-drawn nodes match first
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const node = this.nodes[i];
+      const r = this.realisticMode && node.realisticLayout ? node.realisticLayout.realisticRadius : node.metrics.radius;
       const dist = Math.hypot(worldPos.x - node.x, worldPos.y - node.y);
-      if (dist <= node.metrics.radius + 6) {
-        return node;
+      if (dist <= r + 8) {
+        // If in realistic mode, check if click hit a specific internal sub-seal
+        let hitSubSeal = null;
+        if (this.realisticMode && node.realisticLayout?.subSeals) {
+          for (const sub of node.realisticLayout.subSeals) {
+            const subDist = Math.hypot(worldPos.x - (node.x + sub.dx), worldPos.y - (node.y + sub.dy));
+            if (subDist <= sub.radius) {
+              hitSubSeal = sub;
+              break;
+            }
+          }
+        }
+        return { node, hitSubSeal };
       }
     }
     return null;

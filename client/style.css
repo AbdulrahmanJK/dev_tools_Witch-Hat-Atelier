@@ -186,6 +186,52 @@ html, body {
   border-color: var(--ink-primary);
 }
 
+#btn-toggle-realistic.active {
+  background: #b83a14;
+  color: #f4f1e3;
+  border-color: #b83a14;
+  box-shadow: 0 0 12px rgba(184, 58, 20, 0.35);
+}
+
+#btn-toggle-realistic.active .mode-icon {
+  animation: spin 8s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.circuit-sub-seal-card {
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+  padding: 0.55rem 0.75rem;
+  background: rgba(255, 255, 255, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.circuit-sub-seal-card.highlight {
+  border-color: #b83a14;
+  background: rgba(184, 58, 20, 0.06);
+}
+
+.sub-seal-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sub-seal-vars {
+  font-size: 0.70rem;
+  font-style: italic;
+  color: var(--ink-secondary);
+  line-height: 1.4;
+}
+
 /* ═══════════ CANVAS VIEWPORT ═══════════ */
 #viewport-container {
   position: relative;

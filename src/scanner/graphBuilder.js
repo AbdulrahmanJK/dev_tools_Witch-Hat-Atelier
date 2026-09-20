@@ -65,6 +65,7 @@ export class GraphBuilder {
             hooks: comp.hooksUsed,
             children: comp.renderedChildren,
             reduxDispatches: comp.reduxDispatches,
+            internalCircuit: comp.internalCircuit || { stateVariables: [], effects: [], handlers: [] },
             metrics,
             cluster,
           };

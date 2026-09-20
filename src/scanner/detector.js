@@ -187,6 +187,9 @@ export function detectFileEntities(ast, code, filePath) {
     const renderedChildren = new Set();
     const props = [];
     const reduxDispatches = [];
+    const stateVariables = [];
+    const effectList = [];
+    const internalHandlers = [];
 
     // Props extraction
     if (fnNode.params && fnNode.params.length > 0) {
@@ -200,8 +203,53 @@ export function detectFileEntities(ast, code, filePath) {
       }
     }
 
-    // Traverse component body for hooks, JSX children, and Redux dispatches
+    // Traverse component body for hooks, JSX children, state vars, effects, and helper functions
     path.traverse({
+      VariableDeclarator(vPath) {
+        const id = vPath.node.id;
+        const init = vPath.node.init;
+
+        // Extract State Variable names: const [foo, setFoo] = useState(...)
+        if (init && init.type === 'CallExpression') {
+          const callee = init.callee?.name || init.callee?.property?.name;
+          if (['useState', 'useReducer'].includes(callee) && id.type === 'ArrayPattern' && id.elements[0]?.name) {
+            stateVariables.push({
+              name: id.elements[0].name,
+              setter: id.elements[1]?.name || '',
+              line: vPath.node.loc?.start?.line,
+            });
+          }
+        }
+
+        // Extract internal helper functions: const handleClick = () => ...
+        if (id.type === 'Identifier' && init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')) {
+          const fnName = id.name;
+          if (!/^use[A-Z]/.test(fnName) && !/^[A-Z]/.test(fnName)) {
+            const loc = init.loc ? init.loc.end.line - init.loc.start.line + 1 : 1;
+            internalHandlers.push({
+              name: fnName,
+              loc,
+              line: vPath.node.loc?.start?.line,
+            });
+          }
+        }
+      },
+
+      FunctionDeclaration(fPath) {
+        // Internal helper functions declared with function keyword
+        if (fPath.parentPath === path || fPath.parentPath?.parentPath === path) {
+          const fnName = fPath.node.id?.name;
+          if (fnName && !/^use[A-Z]/.test(fnName) && !/^[A-Z]/.test(fnName)) {
+            const loc = fPath.node.loc ? fPath.node.loc.end.line - fPath.node.loc.start.line + 1 : 1;
+            internalHandlers.push({
+              name: fnName,
+              loc,
+              line: fPath.node.loc?.start?.line,
+            });
+          }
+        }
+      },
+
       CallExpression(cPath) {
         const callee = cPath.node.callee;
         let callName = '';
@@ -219,6 +267,21 @@ export function detectFileEntities(ast, code, filePath) {
           } else if (callName === 'useContext' && cPath.node.arguments[0]?.name) {
             detail = cPath.node.arguments[0].name;
           }
+
+          // Extract effect dependencies
+          if (['useEffect', 'useLayoutEffect'].includes(callName)) {
+            const deps = [];
+            const depsArg = cPath.node.arguments[1];
+            if (depsArg && depsArg.type === 'ArrayExpression') {
+              depsArg.elements.forEach((el) => {
+                if (el?.name) deps.push(el.name);
+                else if (el?.property?.name) deps.push(el.property.name);
+              });
+            }
+            effectList.push({ deps, line: cPath.node.loc?.start?.line });
+            detail = deps.length > 0 ? `[${deps.join(', ')}]` : '[]';
+          }
+
           hooksUsed.push({
             name: callName,
             detail,
@@ -254,6 +317,13 @@ export function detectFileEntities(ast, code, filePath) {
     const startLine = fnNode.loc?.start?.line || 1;
     const endLine = fnNode.loc?.end?.line || startLine;
 
+    // Synthesize the Internal Circuit
+    const internalCircuit = {
+      stateVariables: stateVariables.slice(0, 12),
+      effects: effectList.slice(0, 8),
+      handlers: internalHandlers.slice(0, 8),
+    };
+
     return {
       name,
       kind: isWrapped ? wrapperType : fnNode.type === 'ArrowFunctionExpression' ? 'arrow' : 'function',
@@ -264,6 +334,7 @@ export function detectFileEntities(ast, code, filePath) {
       hooksUsed,
       renderedChildren: Array.from(renderedChildren),
       reduxDispatches,
+      internalCircuit,
     };
   }
 

@@ -36,6 +36,10 @@
         </div>
 
         <!-- Action / View Controls -->
+        <button class="action-btn" id="btn-toggle-realistic" title="Toggle True WHA Nested Compound Seals">
+          <span class="mode-icon">✦</span> Realistic Mode
+        </button>
+
         <button class="action-btn" id="btn-fit-world">
           <span>⊕</span> Fit Kingdom
         </button>
@@ -90,6 +94,14 @@
             <div class="stability-card" id="insp-stability-card">
               <div class="stability-title" id="insp-stability-grade">Master Seal</div>
               <div class="stability-note" id="insp-stability-note">—</div>
+            </div>
+          </div>
+
+          <!-- Internal Circuit in Realistic Mode -->
+          <div id="insp-circuit-section">
+            <div class="section-label">Internal Circuit (Inscribed Sub-Seals)</div>
+            <div class="keystone-list" id="insp-circuit-list">
+              <!-- Dynamically populated in Realistic Mode -->
             </div>
           </div>
 
