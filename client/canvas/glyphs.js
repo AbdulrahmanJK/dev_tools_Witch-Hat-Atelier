@@ -49,7 +49,7 @@ export class GlyphRenderer {
   }
 
   // ═══════════ MAIN NODE RENDERER ═══════════
-  renderNode(ctx, node, lod, isSelected, isHovered, artMode = false) {
+  renderNode(ctx, node, lod, isSelected, isHovered, artMode = false, isLineageNode = false) {
     // If in Art Blueprint Mode (черно-белый чертеж / картина без интерактива)
     if (artMode) {
       this.renderArtBlueprintSeal(ctx, node, lod);
@@ -58,7 +58,7 @@ export class GlyphRenderer {
 
     // By DEFAULT: render full complex nested compound seal!
     if (node.realisticLayout && node.realisticLayout.subSeals?.length > 0) {
-      this.renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered);
+      this.renderRealisticCompoundSeal(ctx, node, lod, isSelected, isHovered, isLineageNode);
       return;
     }
 
@@ -109,6 +109,8 @@ export class GlyphRenderer {
   renderArtBlueprintSeal(ctx, node, lod) {
     const layout = node.realisticLayout || { realisticRadius: node.metrics.radius, subSeals: [], conduits: [] };
     const r = layout.realisticRadius;
+    const chamberR = layout.chamberRadius || Math.round(r * 0.60);
+    const keystoneR = layout.keystoneRadius || Math.round(r * 0.82);
     const ink = '#141311';
 
     ctx.save();
@@ -155,30 +157,34 @@ export class GlyphRenderer {
       ctx.stroke();
     }
 
-    // 2. Canonical Radial Keystone Crown from extracted code operations
-    if (r >= 45 || lod >= 1) {
-      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : (r > 140 ? 16 : 8);
-      this.drawRadialKeystoneCrown(ctx, r * 0.76, signs, ink);
-
-      // Inner ring enclosing the center core
+    // 2. Inner Chamber Dividing Ring (separating internal circuit from keystone corridor)
+    if (layout.subSeals && layout.subSeals.length > 1) {
       ctx.beginPath();
-      ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
-      ctx.strokeStyle = ink;
+      ctx.arc(0, 0, chamberR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.40)';
       ctx.lineWidth = 0.9;
+      ctx.setLineDash([3, 4]);
       ctx.stroke();
+      ctx.setLineDash([]);
     }
 
-    // 3. Central Canonical Sigil or Inscribed Sub-Seals
-    if (layout.subSeals && layout.subSeals.length > 2 && lod >= 2) {
-      // Conduits
+    // 3. Canonical Radial Keystone Crown in dedicated outer annular band
+    if (r >= 45 || lod >= 1) {
+      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : (r > 140 ? 16 : 8);
+      this.drawRadialKeystoneCrown(ctx, keystoneR, signs, ink);
+    }
+
+    // 4. Central Canonical Sigil or Inscribed Sub-Seals inside chamber
+    if (layout.subSeals && layout.subSeals.length > 1 && lod >= 2) {
+      // Conduits inside chamber
       this.drawArtConduits(ctx, layout.subSeals, layout.conduits);
-      // Inscribed Sub-Seals
+      // Inscribed Sub-Seals (NO text in Art Mode!)
       layout.subSeals.forEach((sub) => {
-        this.drawArtSubSeal(ctx, sub, lod);
+        this.drawArtSubSeal(ctx, sub, lod, false);
       });
     } else {
       // Center: exact canonical vector sigil
-      const sigilSize = Math.max(12, r * 0.44);
+      const sigilSize = Math.max(12, chamberR * 0.50);
       ctx.strokeStyle = ink;
       ctx.fillStyle = ink;
       ctx.lineWidth = r > 100 ? 1.8 : 1.1;
@@ -352,7 +358,7 @@ export class GlyphRenderer {
   }
 
   // ═══════════ INSCRIBED ART SUB-SEAL (ЧЕРНО-БЕЛЫЙ ПОД-КРУГ) ═══════════
-  drawArtSubSeal(ctx, sub, lod) {
+  drawArtSubSeal(ctx, sub, lod, showText = false) {
     ctx.save();
     ctx.translate(sub.dx, sub.dy);
     const sr = sub.radius;
@@ -368,13 +374,13 @@ export class GlyphRenderer {
     ctx.beginPath();
     ctx.arc(0, 0, sr, 0, Math.PI * 2);
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 2.0;
+    ctx.lineWidth = 1.4;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(0, 0, sr - 3.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(20, 19, 17, 0.55)';
-    ctx.lineWidth = 0.9;
+    ctx.arc(0, 0, sr - 3.0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
+    ctx.lineWidth = 0.8;
     ctx.stroke();
 
     // 4 Cardinal ticks
@@ -382,9 +388,9 @@ export class GlyphRenderer {
       const a = (i * Math.PI) / 2;
       ctx.beginPath();
       ctx.moveTo((sr - 1) * Math.cos(a), (sr - 1) * Math.sin(a));
-      ctx.lineTo((sr - 5) * Math.cos(a), (sr - 5) * Math.sin(a));
+      ctx.lineTo((sr - 4) * Math.cos(a), (sr - 4) * Math.sin(a));
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = 1.1;
       ctx.stroke();
     }
 
@@ -400,23 +406,16 @@ export class GlyphRenderer {
       ctx.lineTo(-ds, 0);
       ctx.closePath();
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-      // Fine center crosshair
-      ctx.beginPath();
-      ctx.moveTo(-ds * 0.4, 0); ctx.lineTo(ds * 0.4, 0);
-      ctx.moveTo(0, -ds * 0.4); ctx.lineTo(0, ds * 0.4);
-      ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
-      ctx.lineWidth = 0.9;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
     } else if (sub.type === 'effects') {
       ctx.beginPath();
       ctx.arc(0, 0, sr * 0.40, 0, Math.PI * 2);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.6;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
+      ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
       ctx.fillStyle = ink;
       ctx.fill();
     } else if (sub.type === 'handler') {
@@ -427,7 +426,7 @@ export class GlyphRenderer {
       ctx.moveTo(-ts * 0.6, ts * 0.8);
       ctx.lineTo(ts * 0.6, ts * 0.8);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
     } else if (sub.type === 'child') {
       const cs = sr * 0.38;
@@ -436,23 +435,17 @@ export class GlyphRenderer {
       ctx.lineTo(0, -cs * 0.6);
       ctx.lineTo(cs, cs * 0.6);
       ctx.strokeStyle = ink;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 1.4;
       ctx.stroke();
     }
 
-    // Calligraphic technical sub-label
-    if (lod >= 1) {
+    // Calligraphic technical sub-label only when showText is true
+    if (showText && lod >= 2) {
       ctx.textAlign = 'center';
-      const fSize = Math.max(8, Math.min(11, sr * 0.22));
+      const fSize = Math.max(8, Math.min(10, sr * 0.22));
       ctx.font = `600 ${fSize}px 'Palatino Linotype', Palatino, serif`;
       ctx.fillStyle = '#141311';
-      ctx.fillText(sub.name, 0, sr + 10);
-
-      if (lod >= 2 && sub.details && sub.details.length > 0) {
-        ctx.font = `italic 500 ${fSize * 0.88}px 'Palatino Linotype', Palatino, serif`;
-        ctx.fillStyle = 'rgba(20, 19, 17, 0.65)';
-        ctx.fillText(sub.details[0], 0, sr + 21);
-      }
+      ctx.fillText(sub.name, 0, sr + 9);
     }
 
     ctx.restore();
@@ -540,6 +533,9 @@ export class GlyphRenderer {
     ctx.fillStyle = '#f8f5eb';
     ctx.fill();
 
+    const chamberR = layout.chamberRadius || Math.round(r * 0.60);
+    const keystoneR = layout.keystoneRadius || Math.round(r * 0.82);
+
     // 1. Triple Compound Gear-Toothed Outer Ring OR Faceted Strengthen Hexagon for Classes
     const isClass = node.metrics?.geometry === 'faceted-strengthen' || node.metrics?.isClass;
     if (isClass) {
@@ -548,18 +544,30 @@ export class GlyphRenderer {
       this.drawCompoundGearRing(ctx, r, theme, lod);
     }
 
-    // 2. Canonical Radial Keystone Crown from extracted code operations
-    if (lod >= 1) {
-      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : 16;
-      this.drawRadialKeystoneCrown(ctx, r * 0.82, signs, 'rgba(26, 25, 22, 0.75)');
+    // 2. Inner Chamber Dividing Ring (separating inner circuit chamber from keystone band)
+    if (layout.subSeals && layout.subSeals.length > 1) {
+      ctx.beginPath();
+      ctx.arc(0, 0, chamberR, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(26, 25, 22, 0.35)';
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
-    // 3. Internal Conduits (Energy Pathways between sub-seals)
+    // 3. Canonical Radial Keystone Crown in dedicated annular corridor
+    if (lod >= 1) {
+      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : 16;
+      this.drawRadialKeystoneCrown(ctx, keystoneR, signs, 'rgba(26, 25, 22, 0.75)');
+    }
+
+    // 4. Internal Conduits (Energy Pathways between sub-seals)
     this.drawInternalConduits(ctx, layout.subSeals, layout.conduits, theme);
 
-    // 4. Render Each Inscribed Sub-Seal
+    // 5. Render Each Inscribed Sub-Seal strictly inside chamber with Text Visibility Rule
+    const showSubText = isSelected || isLineageNode;
     layout.subSeals.forEach((sub) => {
-      this.drawSubSeal(ctx, sub, lod, theme);
+      this.drawSubSeal(ctx, sub, lod, theme, showSubText);
     });
 
     // 4. Mother Seal Title Banner
@@ -839,20 +847,20 @@ export class GlyphRenderer {
       ctx.stroke();
     }
 
-    // Sub-seal labels (LOD >= 1)
-    if (lod >= 1) {
+    // Sub-seal labels ONLY when showText is true AND lod >= 1
+    if (showText && lod >= 1) {
       ctx.textAlign = 'center';
-      const fSize = Math.max(8, Math.min(11, sr * 0.22));
+      const fSize = Math.max(8, Math.min(10, sr * 0.22));
       ctx.font = `600 ${fSize}px 'Palatino Linotype', Palatino, serif`;
       ctx.fillStyle = '#1c1b18';
-      ctx.fillText(sub.name, 0, sr + 10);
+      ctx.fillText(sub.name, 0, sr + 9);
 
       // Micro details below
       if (lod >= 2 && sub.details && sub.details.length > 0) {
         ctx.font = `italic 500 ${fSize * 0.88}px 'Palatino Linotype', Palatino, serif`;
         ctx.fillStyle = 'rgba(26, 25, 22, 0.70)';
         const topDetail = sub.details[0];
-        ctx.fillText(topDetail, 0, sr + 21);
+        ctx.fillText(topDetail, 0, sr + 19);
       }
     }
 
