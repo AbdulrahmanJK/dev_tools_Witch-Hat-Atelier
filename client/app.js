@@ -238,10 +238,17 @@ class GrimoireApp {
     });
 
     document.getElementById('btn-fit-world').addEventListener('click', () => {
+      const rootNode = this.allNodes.find((n) => n.name === 'App' || (n.cluster && n.cluster.includes('Root')));
+
       if (this.unifiedMode && this.graphData?.unifiedLayout?.bounds) {
         this.camera.fitBounds(this.graphData.unifiedLayout.bounds);
       } else if (this.graphData && this.graphData.bounds) {
         this.camera.fitBounds(this.graphData.bounds);
+      }
+
+      // Automatically select the master root component (App.jsx)
+      if (rootNode) {
+        this.selectNode(rootNode);
       }
       this.requestRender();
     });
@@ -425,7 +432,8 @@ class GrimoireApp {
 
     const ancestry = this.getAncestryChain(node.id);
     const descendantTree = this.getDescendantTree(node.id);
-    this.renderer.setHighlightedLineage(ancestry, descendantTree);
+    const consumers = node.consumers || [];
+    this.renderer.setHighlightedLineage(ancestry, descendantTree, consumers);
     this.openInspector(node, hitSubSeal, ancestry, descendantTree);
     this.requestRender();
   }
@@ -492,6 +500,34 @@ class GrimoireApp {
     stabCard.className = 'stability-card' + (isForbidden ? ' forbidden' : '');
     document.getElementById('insp-stability-grade').textContent = node.metrics.grade;
     document.getElementById('insp-stability-note').textContent = node.metrics.stabilityNote;
+
+    // Master Forge Consumers (if reused across components)
+    const forgeSec = document.getElementById('insp-forge-section');
+    const forgePills = document.getElementById('insp-forge-pills');
+    const consumers = node.consumers || [];
+
+    if (forgeSec && forgePills) {
+      if (consumers.length > 1) {
+        forgeSec.style.display = 'block';
+        forgePills.innerHTML = '';
+        consumers.forEach((cId) => {
+          const cNode = this.nodeMap.get(cId);
+          if (cNode) {
+            const pill = document.createElement('button');
+            pill.className = 'node-link-pill';
+            pill.style.borderColor = '#c48b26';
+            pill.innerHTML = `<span style="color:#c48b26">✦</span> ${cNode.name} (${cNode.loc}L)`;
+            pill.addEventListener('click', () => {
+              this.selectNode(cNode);
+              this.camera.focusNode(cNode, 0.9);
+            });
+            forgePills.appendChild(pill);
+          }
+        });
+      } else {
+        forgeSec.style.display = 'none';
+      }
+    }
 
     // 2. Hierarchical Descent Tree (Древо переходов к младшим)
     const descTreeEl = document.getElementById('insp-descendant-tree');

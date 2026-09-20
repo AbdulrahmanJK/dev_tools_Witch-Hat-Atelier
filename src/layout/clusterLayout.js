@@ -61,6 +61,9 @@ export class ClusterLayout {
         n.unifiedX = uNode.unifiedX;
         n.unifiedY = uNode.unifiedY;
         n.unifiedR = uNode.unifiedR;
+        n.consumers = uNode.consumers || [];
+        n.reuseCount = uNode.reuseCount || 0;
+        n.isSharedHub = !!uNode.isSharedHub;
       }
     });
 

@@ -1,7 +1,7 @@
 export class UnifiedFractalLayout {
   constructor(options = {}) {
-    this.leafBaseRadius = options.leafBaseRadius || 36;
-    this.padding = options.padding || 14;
+    this.leafBaseRadius = options.leafBaseRadius || 30;
+    this.padding = options.padding || 12;
   }
 
   computeUnifiedLayout(graph) {
@@ -14,36 +14,67 @@ export class UnifiedFractalLayout {
       rootNode = nodes.reduce((best, curr) => (curr.children?.length > best.children?.length ? curr : best), nodes[0]);
     }
 
-    // 2. Classify Every Node into Sacred Domain Sectors (Секторальная мандала)
+    // 2. Calculate In-Degree / Reuse Counts for Every Component
+    const consumersMap = new Map();
+    nodes.forEach((n) => consumersMap.set(n.id, new Set()));
+
+    edges.forEach((e) => {
+      if (e.source !== rootNode?.id && e.source !== e.target) {
+        if (consumersMap.has(e.target)) {
+          consumersMap.get(e.target).add(e.source);
+        }
+      }
+    });
+
+    // Also check JSX children references
+    nodes.forEach((p) => {
+      if (p.id !== rootNode?.id) {
+        (p.children || []).forEach((chName) => {
+          const cNode = nodes.find((n) => n.name === chName);
+          if (cNode && cNode.id !== p.id && consumersMap.has(cNode.id)) {
+            consumersMap.get(cNode.id).add(p.id);
+          }
+        });
+      }
+    });
+
+    nodes.forEach((n) => {
+      const consumers = Array.from(consumersMap.get(n.id) || []);
+      n.consumers = consumers;
+      n.reuseCount = consumers.length;
+      // Master Forge rule: if reused across multiple components, it is a Shared Atelier Hub
+      n.isSharedHub = n.reuseCount >= 2;
+    });
+
+    // 3. Classify into Sacred Domain Sectors
     const classifyDomain = (node) => {
       const p = (node.file || '').toLowerCase();
       const n = (node.name || '').toLowerCase();
 
-      // North: Shell, Navigation, Framework
+      if (node.isSharedHub) {
+        return 'FORGE'; // Shared Atelier Hub Belt
+      }
       if (p.includes('header') || p.includes('menu') || p.includes('crumbs') || p.includes('context') || n === 'app') {
-        return 'SHELL';
+        return 'SHELL'; // North
       }
-      // East: Products, Catalog, LabelEditor, Orders
       if (p.includes('products') || p.includes('orders') || p.includes('ordercode') || p.includes('labeleditor')) {
-        return 'COMMERCE';
+        return 'COMMERCE'; // East
       }
-      // South: Reports, Consignments, Aggregates, Checkup, Logistics
       if (p.includes('reports') || p.includes('consignments') || p.includes('aggregates') || p.includes('checkup') || p.includes('line') || p.includes('realization')) {
-        return 'OPERATIONS';
+        return 'OPERATIONS'; // South
       }
-      // West: Users, Auth, Company, Settings, Legal, Logs
       if (p.includes('auth') || p.includes('user') || p.includes('company') || p.includes('settings') || p.includes('productowner') || p.includes('log') || p.includes('legal')) {
-        return 'GOVERNANCE';
+        return 'GOVERNANCE'; // West
       }
-      // Outer Belt: Reusable Components & Ateliers
-      return 'ATELIER';
+      return 'FORGE';
     };
 
     nodes.forEach((n) => {
       n.domainSector = classifyDomain(n);
     });
 
-    // 3. Build Strict Parent -> Children Tree (Acyclic Hierarchy)
+    // 4. Build Strict Parent -> Children Tree (Acyclic Hierarchy)
+    // Shared hubs sit at the domain/atelier level, while private children nest inside their parent
     const treeMap = new Map();
     const assignedNodes = new Set([rootNode.id]);
 
@@ -65,16 +96,17 @@ export class UnifiedFractalLayout {
 
       for (const name of childNames) {
         const candidate = nodes.find((n) => n.name === name && !assignedNodes.has(n.id));
-        if (candidate) {
+        // Private children nest inside their unique parent
+        if (candidate && (!candidate.isSharedHub || parent.id === rootNode.id)) {
           assignedNodes.add(candidate.id);
           children.push(candidate);
         }
       }
 
       if (parent.id === rootNode.id) {
-        // Partition remaining nodes into root children
+        // Collect remaining shared hubs and unassigned nodes into root's sectors
         const remaining = nodes.filter((n) => !assignedNodes.has(n.id));
-        remaining.sort((a, b) => b.loc - a.loc);
+        remaining.sort((a, b) => b.reuseCount - a.reuseCount || b.loc - a.loc);
         remaining.forEach((rem) => {
           if (!assignedNodes.has(rem.id)) {
             assignedNodes.add(rem.id);
@@ -89,33 +121,29 @@ export class UnifiedFractalLayout {
 
     buildHierarchy(rootNode);
 
-    // 4. Apollonian Tangent Circle Packing for Children inside Parent
+    // 5. Apollonian Tangent Circle Packing for Nested Children
     const packApollonian = (children, domainAngles = null) => {
-      if (children.length === 0) return { radius: 40, placed: [] };
+      if (children.length === 0) return { radius: 36, placed: [] };
 
-      // Sort largest to smallest for tight Apollonian settlement
+      // Sort largest to smallest
       const sorted = [...children].sort((a, b) => b.unifiedRadius - a.unifiedRadius);
       const placed = [];
 
-      // Initial placement
       sorted.forEach((child, idx) => {
         let angle = 0;
         let dist = 0;
 
         if (domainAngles && child.domainSector && domainAngles[child.domainSector]) {
-          // In root: Place child in its domain sector!
           const sector = domainAngles[child.domainSector];
-          const jitter = (idx % 7 - 3) * 0.12;
+          const jitter = ((idx % 9) - 4) * 0.11;
           angle = sector.baseAngle + jitter;
-          dist = sector.baseDist + Math.sqrt(idx) * (child.unifiedRadius * 0.6 + this.padding);
+          dist = sector.baseDist + Math.sqrt(idx) * (child.unifiedRadius * 0.65 + this.padding);
         } else if (idx === 0) {
-          // Central or near-center
           angle = 0;
-          dist = child.unifiedRadius * 0.4;
+          dist = child.unifiedRadius * 0.35;
         } else {
-          // Phyllotaxis / Golden spiral start
-          angle = idx * 2.39996;
-          dist = Math.sqrt(idx) * (child.unifiedRadius * 1.3 + this.padding);
+          angle = idx * 2.39996; // Golden angle
+          dist = Math.sqrt(idx) * (child.unifiedRadius * 1.25 + this.padding);
         }
 
         child.udx = Math.cos(angle) * dist;
@@ -123,17 +151,15 @@ export class UnifiedFractalLayout {
         placed.push(child);
       });
 
-      // Apollonian Relaxation: Gravity Pull toward Center + Strict Tangent Repulsion
+      // Pairwise Hard Collision Repulsion (ensures kissing tangency, no overlaps)
       const iterations = 45;
       for (let iter = 0; iter < iterations; iter++) {
-        // 1. Inward Gravity force: pulls circles tight together
         for (let i = 0; i < placed.length; i++) {
           const c = placed[i];
           c.udx *= 0.96;
           c.udy *= 0.96;
         }
 
-        // 2. Pairwise Hard Collision Repulsion with Organic Interlocking Overlap (~15% intersection)
         for (let i = 0; i < placed.length; i++) {
           for (let j = i + 1; j < placed.length; j++) {
             const c1 = placed[i];
@@ -141,8 +167,7 @@ export class UnifiedFractalLayout {
             const dx = c2.udx - c1.udx;
             const dy = c2.udy - c1.udy;
             const dist = Math.hypot(dx, dy) || 0.001;
-            // 15% overlap allowance for interlocking sacred geometry circles
-            const targetDist = (c1.unifiedRadius + c2.unifiedRadius) * 0.85;
+            const targetDist = c1.unifiedRadius + c2.unifiedRadius + this.padding;
 
             if (dist < targetDist) {
               const push = (targetDist - dist) / 2;
@@ -157,7 +182,6 @@ export class UnifiedFractalLayout {
         }
       }
 
-      // Compute tight enclosing circle radius
       let maxDist = 30;
       placed.forEach((c) => {
         const d = Math.hypot(c.udx, c.udy) + c.unifiedRadius;
@@ -170,38 +194,45 @@ export class UnifiedFractalLayout {
       };
     };
 
-    // 5. Bottom-Up Recursive Packing
+    // 6. Bottom-Up Recursive Packing: Parents strictly larger than children
     const packNodeChildren = (node, isRoot = false) => {
       const children = treeMap.get(node.id) || [];
       children.forEach((c) => packNodeChildren(c, false));
 
       if (children.length === 0) {
-        const loc = node.loc || 1;
-        node.unifiedRadius = Math.round(this.leafBaseRadius + Math.min(35, Math.log2(Math.max(1, loc)) * 6));
+        if (node.isSharedHub) {
+          // Reused components scale larger than the components using them!
+          node.unifiedRadius = Math.round(44 + Math.min(80, node.reuseCount * 2.8) + Math.log2(Math.max(1, node.loc)) * 3.2);
+        } else {
+          const loc = node.loc || 1;
+          node.unifiedRadius = Math.round(this.leafBaseRadius + Math.min(26, Math.log2(Math.max(1, loc)) * 4.2));
+        }
         node.unifiedChildren = [];
         return;
       }
 
       let domainAngles = null;
       if (isRoot) {
-        // Define domain sector angles for App (Секторальная мандала)
         domainAngles = {
-          SHELL:      { baseAngle: -Math.PI / 2, baseDist: 650 }, // North
-          COMMERCE:   { baseAngle: 0,             baseDist: 750 }, // East
-          OPERATIONS: { baseAngle: Math.PI / 2,  baseDist: 750 }, // South
-          GOVERNANCE: { baseAngle: Math.PI,       baseDist: 700 }, // West
-          ATELIER:    { baseAngle: 0.8,           baseDist: 1450 }, // Outer Belt
+          SHELL:      { baseAngle: -Math.PI / 2, baseDist: 600 },  // North
+          COMMERCE:   { baseAngle: 0,             baseDist: 720 },  // East
+          OPERATIONS: { baseAngle: Math.PI / 2,  baseDist: 720 },  // South
+          GOVERNANCE: { baseAngle: Math.PI,       baseDist: 660 },  // West
+          FORGE:      { baseAngle: 0.85,          baseDist: 1100 }, // Outer Master Forges Belt
         };
       }
 
       const { radius, placed } = packApollonian(children, domainAngles);
-      node.unifiedRadius = radius;
+
+      // Parent must be strictly larger than any child and enclose all placed children
+      const maxChildR = Math.max(...children.map((c) => c.unifiedRadius));
+      node.unifiedRadius = Math.max(radius, Math.round(maxChildR * 1.5 + 40));
       node.unifiedChildren = placed;
     };
 
     packNodeChildren(rootNode, true);
 
-    // 6. Top-Down Absolute Coordinate Assignment
+    // 7. Top-Down Absolute Coordinate Assignment
     rootNode.ux = 0;
     rootNode.uy = 0;
 
@@ -216,14 +247,14 @@ export class UnifiedFractalLayout {
 
     assignAbsoluteCoords(rootNode);
 
-    // 7. Domain Sector Banners Metadata for Drawing
+    // 8. Domain Sector Metadata for Drawing
     const rootRadius = rootNode.unifiedRadius;
     const mandalaSectors = [
-      { name: 'NAVIGATION & SHELL', angle: -Math.PI / 2, radius: rootRadius * 0.48 },
-      { name: 'COMMERCE & PRODUCTS', angle: 0, radius: rootRadius * 0.52 },
-      { name: 'OPERATIONS & REPORTS', angle: Math.PI / 2, radius: rootRadius * 0.52 },
-      { name: 'GOVERNANCE & IDENTITY', angle: Math.PI, radius: rootRadius * 0.48 },
-      { name: 'REUSABLE ATELIERS', angle: Math.PI * 0.28, radius: rootRadius * 0.85 },
+      { name: 'NAVIGATION & SHELL', angle: -Math.PI / 2, radius: rootRadius * 0.45 },
+      { name: 'COMMERCE & PRODUCTS', angle: 0, radius: rootRadius * 0.50 },
+      { name: 'OPERATIONS & REPORTS', angle: Math.PI / 2, radius: rootRadius * 0.50 },
+      { name: 'GOVERNANCE & IDENTITY', angle: Math.PI, radius: rootRadius * 0.45 },
+      { name: 'SHARED ATELIER FORGES', angle: Math.PI * 0.28, radius: rootRadius * 0.82 },
     ];
 
     const unifiedNodes = nodes.map((n) => ({
@@ -232,6 +263,9 @@ export class UnifiedFractalLayout {
       unifiedY: n.uy || 0,
       unifiedR: n.unifiedRadius || n.metrics.radius,
       domainSector: n.domainSector,
+      reuseCount: n.reuseCount,
+      isSharedHub: n.isSharedHub,
+      consumers: n.consumers,
     }));
 
     const bounds = {
