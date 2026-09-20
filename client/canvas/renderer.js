@@ -333,7 +333,10 @@ export class WorldRenderer {
     if (this.realisticMode) return;
 
     const isArt = this.realisticMode;
-    this.pulseOffset = (this.pulseOffset + 0.35) % 20;
+    // Delta-time based continuous fluid animation:
+    // Pattern [8, 4] has exact period of 12px. Speed is 24px/sec -> 100% mathematically continuous, ZERO stutter/jerk!
+    const nowSec = performance.now() / 1000;
+    const pulseOffset = (nowSec * 24) % 12;
 
     const activeNodeId = isArt ? null : (this.selectedNodeId || this.hoveredNodeId);
     const connectedNodeIds = new Set();
@@ -395,7 +398,7 @@ export class WorldRenderer {
         ctx.strokeStyle = '#c48b26';
         ctx.lineWidth = 3.6;
         ctx.setLineDash([8, 4]);
-        ctx.lineDashOffset = -this.pulseOffset;
+        ctx.lineDashOffset = -pulseOffset;
         ctx.stroke();
         ctx.setLineDash([]);
         continue;
@@ -432,7 +435,7 @@ export class WorldRenderer {
           ctx.strokeStyle = color;
           ctx.lineWidth = 2.4;
           ctx.setLineDash([8, 4]);
-          ctx.lineDashOffset = isOutgoing ? -this.pulseOffset : this.pulseOffset;
+          ctx.lineDashOffset = isOutgoing ? -pulseOffset : pulseOffset;
           ctx.stroke();
           ctx.setLineDash([]);
         } else {
@@ -483,6 +486,7 @@ export class WorldRenderer {
         ctx.strokeStyle = '#c48b26';
         ctx.lineWidth = 2.2;
         ctx.setLineDash([5, 5]);
+        ctx.lineDashOffset = -(performance.now() / 1000 * 15) % 10;
         ctx.stroke();
         ctx.restore();
       }

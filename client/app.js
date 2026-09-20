@@ -28,7 +28,12 @@ class GrimoireApp {
           this.renderer.render();
           this.updateHUD();
 
-          if (this.camera.animating) {
+          // Keep animating smoothly at 60 FPS while camera is moving, or when lines/auras are active!
+          const hasActiveAnimation =
+            this.camera.animating ||
+            (!this.realisticMode && (this.renderer.selectedNodeId || this.renderer.hoveredNodeId));
+
+          if (hasActiveAnimation) {
             this.requestRender();
           }
         });
