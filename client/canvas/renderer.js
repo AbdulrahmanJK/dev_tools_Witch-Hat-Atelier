@@ -319,6 +319,9 @@ export class WorldRenderer {
   }
 
   drawEdges(ctx, vp, lod) {
+    // In Realistic Mode: Hide ALL connection lines so circles stand out purely as manga art!
+    if (this.realisticMode) return;
+
     const isArt = this.realisticMode;
     this.pulseOffset = (this.pulseOffset + 0.35) % 20;
 

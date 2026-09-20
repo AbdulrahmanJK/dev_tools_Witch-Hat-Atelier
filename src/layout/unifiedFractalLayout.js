@@ -133,7 +133,7 @@ export class UnifiedFractalLayout {
           c.udy *= 0.96;
         }
 
-        // 2. Pairwise Hard Collision Repulsion (ensures kissing tangency, no overlaps)
+        // 2. Pairwise Hard Collision Repulsion with Organic Interlocking Overlap (~15% intersection)
         for (let i = 0; i < placed.length; i++) {
           for (let j = i + 1; j < placed.length; j++) {
             const c1 = placed[i];
@@ -141,7 +141,8 @@ export class UnifiedFractalLayout {
             const dx = c2.udx - c1.udx;
             const dy = c2.udy - c1.udy;
             const dist = Math.hypot(dx, dy) || 0.001;
-            const targetDist = c1.unifiedRadius + c2.unifiedRadius + this.padding;
+            // 15% overlap allowance for interlocking sacred geometry circles
+            const targetDist = (c1.unifiedRadius + c2.unifiedRadius) * 0.85;
 
             if (dist < targetDist) {
               const push = (targetDist - dist) / 2;
