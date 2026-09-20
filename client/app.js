@@ -59,6 +59,7 @@ class GrimoireApp {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       this.graphData = await res.json();
       this.allNodes = this.graphData.nodes;
+      this.nodeMap = new Map(this.allNodes.map((n) => [n.id, n]));
 
       this.renderer.setData(this.graphData);
 
@@ -228,18 +229,132 @@ class GrimoireApp {
     }
   }
 
+  getAncestryChain(targetId) {
+    if (!this.graphData || !this.graphData.edges) return [this.nodeMap.get(targetId)].filter(Boolean);
+
+    const root = this.allNodes.find((n) => n.name === 'App' || (n.cluster && n.cluster.includes('Root')));
+    if (!root || root.id === targetId) return [this.nodeMap.get(targetId)].filter(Boolean);
+
+    // BFS from root to target
+    const adj = new Map();
+    this.graphData.edges.forEach((e) => {
+      if (!adj.has(e.source)) adj.set(e.source, []);
+      adj.get(e.source).push(e.target);
+    });
+
+    const queue = [[root.id]];
+    const visited = new Set([root.id]);
+    let foundPath = null;
+
+    while (queue.length > 0) {
+      const path = queue.shift();
+      const curr = path[path.length - 1];
+
+      if (curr === targetId) {
+        foundPath = path;
+        break;
+      }
+
+      const neighbors = adj.get(curr) || [];
+      for (const nextId of neighbors) {
+        if (!visited.has(nextId)) {
+          visited.add(nextId);
+          queue.push([...path, nextId]);
+        }
+      }
+    }
+
+    if (foundPath) {
+      return foundPath.map((id) => this.nodeMap.get(id)).filter(Boolean);
+    }
+
+    // Fallback: reverse traverse single parent
+    const incoming = this.graphData.edges.filter((e) => e.target === targetId);
+    if (incoming.length > 0) {
+      const pNode = this.nodeMap.get(incoming[0].source);
+      if (pNode) return [pNode, this.nodeMap.get(targetId)].filter(Boolean);
+    }
+
+    return [this.nodeMap.get(targetId)].filter(Boolean);
+  }
+
+  getDescendantTree(nodeId, currentDepth = 0, maxDepth = 3, visited = new Set()) {
+    const node = this.nodeMap.get(nodeId);
+    if (!node || currentDepth >= maxDepth || visited.has(nodeId)) return null;
+    visited.add(nodeId);
+
+    const childIds = new Set();
+    // 1. Children from rendered JSX tags
+    (node.children || []).forEach((chName) => {
+      const matched = this.allNodes.find((n) => n.name === chName);
+      if (matched && matched.id !== nodeId) childIds.add(matched.id);
+    });
+
+    // 2. Children from outgoing edges
+    this.graphData.edges.forEach((e) => {
+      if (e.source === nodeId && e.target !== nodeId) {
+        childIds.add(e.target);
+      }
+    });
+
+    const children = [];
+    for (const cid of childIds) {
+      const subTree = this.getDescendantTree(cid, currentDepth + 1, maxDepth, new Set(visited));
+      if (subTree) children.push(subTree);
+    }
+
+    return {
+      node,
+      depth: currentDepth,
+      children,
+    };
+  }
+
   selectNode(node, hitSubSeal = null) {
     this.renderer.selectedNodeId = node.id;
-    this.openInspector(node, hitSubSeal);
+    const ancestry = this.getAncestryChain(node.id);
+    const descendantTree = this.getDescendantTree(node.id);
+    this.renderer.setHighlightedLineage(ancestry, descendantTree);
+    this.openInspector(node, hitSubSeal, ancestry, descendantTree);
   }
 
   deselect() {
     this.renderer.selectedNodeId = null;
+    this.renderer.clearHighlightedLineage();
     this.drawer.classList.remove('open');
   }
 
-  openInspector(node, hitSubSeal = null) {
+  openInspector(node, hitSubSeal = null, ancestry = null, descendantTree = null) {
     const theme = WHA_THEMES[node.metrics.element] || WHA_THEMES.Arcane;
+
+    if (!ancestry) ancestry = this.getAncestryChain(node.id);
+    if (!descendantTree) descendantTree = this.getDescendantTree(node.id);
+
+    // 1. Full Ancestral Lineage Breadcrumbs (Путь от истока)
+    const ancestryCrumbsEl = document.getElementById('insp-ancestry-crumbs');
+    if (ancestryCrumbsEl) {
+      ancestryCrumbsEl.innerHTML = '';
+      ancestry.forEach((aNode, idx) => {
+        if (idx > 0) {
+          const arrow = document.createElement('span');
+          arrow.className = 'crumb-arrow';
+          arrow.textContent = '➔';
+          ancestryCrumbsEl.appendChild(arrow);
+        }
+
+        const isCurrent = aNode.id === node.id;
+        const crumb = document.createElement('button');
+        crumb.className = 'crumb-step' + (isCurrent ? ' current' : '');
+        crumb.innerHTML = `<span>✦</span> ${aNode.name} <span style="font-size:0.62rem;opacity:0.65">(${aNode.loc}L)</span>`;
+        if (!isCurrent) {
+          crumb.addEventListener('click', () => {
+            this.selectNode(aNode);
+            this.camera.focusNode(aNode, 0.9);
+          });
+        }
+        ancestryCrumbsEl.appendChild(crumb);
+      });
+    }
 
     // Header values
     const elBadge = document.getElementById('insp-element');
@@ -263,7 +378,53 @@ class GrimoireApp {
     document.getElementById('insp-stability-grade').textContent = node.metrics.grade;
     document.getElementById('insp-stability-note').textContent = node.metrics.stabilityNote;
 
-    // Internal Circuit (Inscribed Sub-Seals)
+    // 2. Hierarchical Descent Tree (Древо переходов к младшим)
+    const descTreeEl = document.getElementById('insp-descendant-tree');
+    if (descTreeEl) {
+      descTreeEl.innerHTML = '';
+      const renderTreeBranch = (item, isRoot = false) => {
+        if (!item || !item.node) return;
+        const cNode = item.node;
+
+        if (!isRoot) {
+          const branch = document.createElement('div');
+          branch.className = 'tree-branch';
+          const indentPx = (item.depth - 1) * 14;
+          branch.style.marginLeft = indentPx + 'px';
+
+          const cTheme = WHA_THEMES[cNode.metrics.element] || WHA_THEMES.Arcane;
+          const guide = item.depth === 1 ? '├──' : '└──';
+
+          branch.innerHTML = `
+            <div class="tree-branch-name">
+              <span class="tree-indent-guide">${guide}</span>
+              <span style="color:${cTheme.stroke}">✦</span>
+              <span>${cNode.name}</span>
+            </div>
+            <div class="tree-meta-badge">${cNode.loc} LOC • ${cNode.metrics.element}</div>
+          `;
+
+          branch.addEventListener('click', () => {
+            this.selectNode(cNode);
+            this.camera.focusNode(cNode, 0.9);
+          });
+
+          descTreeEl.appendChild(branch);
+        }
+
+        if (item.children && item.children.length > 0) {
+          item.children.forEach((childItem) => renderTreeBranch(childItem, false));
+        }
+      };
+
+      if (descendantTree && descendantTree.children && descendantTree.children.length > 0) {
+        renderTreeBranch(descendantTree, true);
+      } else {
+        descTreeEl.innerHTML = '<div style="font-size:0.75rem;color:var(--ink-secondary);font-style:italic">Terminal leaf seal (no downstream junior components).</div>';
+      }
+    }
+
+    // 3. Internal Circuit (Inscribed Sub-Seals)
     const circuitSec = document.getElementById('insp-circuit-section');
     const circuitList = document.getElementById('insp-circuit-list');
     const subSeals = node.realisticLayout?.subSeals || [];

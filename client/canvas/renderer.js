@@ -28,10 +28,49 @@ export class WorldRenderer {
     };
 
     this.realisticMode = false;
+    this.lineageNodeIds = new Set();
+    this.lineageEdgeKeys = new Set();
   }
 
   setRealisticMode(enabled) {
     this.realisticMode = !!enabled;
+  }
+
+  setHighlightedLineage(ancestry = [], descendantTree = null) {
+    this.lineageNodeIds = new Set();
+    this.lineageEdgeKeys = new Set();
+
+    if (!ancestry || ancestry.length === 0) return;
+
+    for (let i = 0; i < ancestry.length; i++) {
+      this.lineageNodeIds.add(ancestry[i].id);
+      if (i > 0) {
+        this.lineageEdgeKeys.add(`${ancestry[i - 1].id}->${ancestry[i].id}`);
+        this.lineageEdgeKeys.add(`${ancestry[i].id}->${ancestry[i - 1].id}`);
+      }
+    }
+
+    const walkDescendants = (tree) => {
+      if (!tree || !tree.node) return;
+      this.lineageNodeIds.add(tree.node.id);
+      if (tree.children) {
+        tree.children.forEach((childTree) => {
+          this.lineageNodeIds.add(childTree.node.id);
+          this.lineageEdgeKeys.add(`${tree.node.id}->${childTree.node.id}`);
+          this.lineageEdgeKeys.add(`${childTree.node.id}->${tree.node.id}`);
+          walkDescendants(childTree);
+        });
+      }
+    };
+
+    if (descendantTree) {
+      walkDescendants(descendantTree);
+    }
+  }
+
+  clearHighlightedLineage() {
+    this.lineageNodeIds = new Set();
+    this.lineageEdgeKeys = new Set();
   }
 
   setData(data) {
@@ -221,6 +260,21 @@ export class WorldRenderer {
       ctx.moveTo(s.x, s.y);
       ctx.quadraticCurveTo(midX, midY, t.x, t.y);
 
+      const edgeKey1 = `${edge.source}->${edge.target}`;
+      const edgeKey2 = `${edge.target}->${edge.source}`;
+      const isLineageEdge = this.lineageEdgeKeys && (this.lineageEdgeKeys.has(edgeKey1) || this.lineageEdgeKeys.has(edgeKey2));
+
+      if (isLineageEdge && !isArt) {
+        // High-prominence illuminated golden thread showing full parent-to-child lineage
+        ctx.strokeStyle = '#c48b26';
+        ctx.lineWidth = 3.6;
+        ctx.setLineDash([8, 4]);
+        ctx.lineDashOffset = -this.pulseOffset;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        continue;
+      }
+
       if (isArt) {
         // Art Mode: pure drafting black ink lines with direction arrowhead
         ctx.strokeStyle = 'rgba(20, 19, 17, 0.30)';
@@ -285,7 +339,21 @@ export class WorldRenderer {
 
       const isSelected = !isArt && node.id === this.selectedNodeId;
       const isHovered = !isArt && node.id === this.hoveredNodeId;
-      const isDimmed = activeNodeId && !connectedNodeIds.has(node.id);
+      const isLineageNode = !isArt && this.lineageNodeIds && this.lineageNodeIds.has(node.id);
+      const isDimmed = activeNodeId && !connectedNodeIds.has(node.id) && !isLineageNode;
+
+      // Draw subtle golden lineage aura on parent/child nodes in the transition chain
+      if (isLineageNode && !isSelected && !isHovered) {
+        ctx.save();
+        ctx.translate(node.x, node.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 10, 0, Math.PI * 2);
+        ctx.strokeStyle = '#c48b26';
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       ctx.save();
       if (isDimmed) {
