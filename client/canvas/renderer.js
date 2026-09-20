@@ -536,13 +536,13 @@ export class WorldRenderer {
     ctx.restore();
   }
 
-  findNodeAt(screenX, screenY) {
+  findNodeAt(clientX, clientY) {
     // In Art Blueprint Mode: Interactivity is intentionally disabled!
     if (this.realisticMode) {
       return null;
     }
 
-    const worldPos = this.camera.screenToWorld(screenX, screenY);
+    const worldPos = this.camera.clientToWorld(clientX, clientY);
     let hitList = [...this.nodes];
     if (this.unifiedMode) {
       // In unified mode, hit-test smallest/innermost children first!

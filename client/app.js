@@ -116,32 +116,47 @@ class GrimoireApp {
   bindUI() {
     // Canvas Click & Hover Hit Testing
     let clickStartPos = { x: 0, y: 0 };
+    let hasDragged = false;
 
     this.viewport.addEventListener('pointerdown', (e) => {
       clickStartPos = { x: e.clientX, y: e.clientY };
+      hasDragged = false;
     });
 
     this.viewport.addEventListener('pointerup', (e) => {
       if (this.realisticMode) return; // Interactivity disabled in Art Mode!
 
       const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
-      if (moved < 5) {
-        // Pure click (not drag pan)
-        const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
-        if (hit) {
-          const node = hit.node || hit;
-          this.selectNode(node, hit.hitSubSeal);
-        } else {
-          this.deselect();
-        }
-        this.requestRender();
+      if (hasDragged || moved >= 6) {
+        // User was panning/dragging the canvas: DO NOT change, switch, or drop selection!
+        hasDragged = false;
+        return;
       }
+
+      // Pure stationary click
+      const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
+      if (hit) {
+        const node = hit.node || hit;
+        this.selectNode(node, hit.hitSubSeal);
+      } else {
+        this.deselect();
+      }
+      this.requestRender();
+    });
+
+    this.viewport.addEventListener('pointercancel', () => {
+      hasDragged = false;
     });
 
     this.viewport.addEventListener('pointermove', (e) => {
-      if (this.camera.isDragging) {
+      const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
+      if (moved > 6) {
+        hasDragged = true;
+      }
+
+      if (this.camera.isDragging || hasDragged) {
         if (this.tooltip) this.tooltip.style.display = 'none';
-        return;
+        return; // Lock hover state while panning/dragging
       }
       if (this.realisticMode) {
         this.viewport.style.cursor = 'grab';
