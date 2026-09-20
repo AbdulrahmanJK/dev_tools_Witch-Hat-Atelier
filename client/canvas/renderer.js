@@ -67,17 +67,17 @@ export class WorldRenderer {
     };
   }
 
-  setHighlightedLineage(ancestry = [], descendantTree = null) {
+  setHighlightedLineage(ancestry = [], descendantTree = null, consumers = []) {
     this.lineageNodeIds = new Set();
     this.lineageEdgeKeys = new Set();
 
-    if (!ancestry || ancestry.length === 0) return;
-
-    for (let i = 0; i < ancestry.length; i++) {
-      this.lineageNodeIds.add(ancestry[i].id);
-      if (i > 0) {
-        this.lineageEdgeKeys.add(`${ancestry[i - 1].id}->${ancestry[i].id}`);
-        this.lineageEdgeKeys.add(`${ancestry[i].id}->${ancestry[i - 1].id}`);
+    if (ancestry && ancestry.length > 0) {
+      for (let i = 0; i < ancestry.length; i++) {
+        this.lineageNodeIds.add(ancestry[i].id);
+        if (i > 0) {
+          this.lineageEdgeKeys.add(`${ancestry[i - 1].id}->${ancestry[i].id}`);
+          this.lineageEdgeKeys.add(`${ancestry[i].id}->${ancestry[i - 1].id}`);
+        }
       }
     }
 
@@ -96,6 +96,16 @@ export class WorldRenderer {
 
     if (descendantTree) {
       walkDescendants(descendantTree);
+    }
+
+    // Connect Master Forge to its consumers with illuminated conduits
+    if (consumers && consumers.length > 0 && ancestry.length > 0) {
+      const selfId = ancestry[ancestry.length - 1]?.id;
+      consumers.forEach((cId) => {
+        this.lineageNodeIds.add(cId);
+        this.lineageEdgeKeys.add(`${selfId}->${cId}`);
+        this.lineageEdgeKeys.add(`${cId}->${selfId}`);
+      });
     }
   }
 
