@@ -3,13 +3,6 @@
    Authentic Victorian-Manga Parchment Aesthetics
    ═══════════════════════════════════════════════════════════════════ */
 
-@font-face {
-  font-family: 'WhaTitle';
-  src: url('assets/wha-title.ttf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-}
-
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -370,6 +363,26 @@ body.art-mode .search-box {
 
 .tree-branch:hover .tree-meta-badge {
   color: #e5e0cf;
+}
+
+/* ═══════════ HOVER TOOLTIP ═══════════ */
+.hover-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 25;
+  background: rgba(250, 248, 240, 0.96);
+  border: 1px solid var(--border-heavy);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  padding: 0.35rem 0.65rem;
+  font-family: var(--font-serif);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-primary);
+  transform: translate(14px, 14px);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
 }
 
 /* ═══════════ CANVAS VIEWPORT ═══════════ */

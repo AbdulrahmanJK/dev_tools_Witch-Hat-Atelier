@@ -270,6 +270,21 @@ export class WorldRenderer {
         continue;
       }
 
+      const edgeKey1 = `${edge.source}->${edge.target}`;
+      const edgeKey2 = `${edge.target}->${edge.source}`;
+      const isLineageEdge = this.lineageEdgeKeys && (this.lineageEdgeKeys.has(edgeKey1) || this.lineageEdgeKeys.has(edgeKey2));
+
+      // Fast straight-line path for distant zoom
+      if (lod === 0 && !isLineageEdge) {
+        ctx.beginPath();
+        ctx.moveTo(sPos.x, sPos.y);
+        ctx.lineTo(tPos.x, tPos.y);
+        ctx.strokeStyle = isArt ? 'rgba(20, 19, 17, 0.14)' : 'rgba(26, 25, 22, 0.08)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        continue;
+      }
+
       const dx = tPos.x - sPos.x;
       const dy = tPos.y - sPos.y;
       const dist = Math.hypot(dx, dy);
@@ -282,10 +297,6 @@ export class WorldRenderer {
       ctx.beginPath();
       ctx.moveTo(sPos.x, sPos.y);
       ctx.quadraticCurveTo(midX, midY, tPos.x, tPos.y);
-
-      const edgeKey1 = `${edge.source}->${edge.target}`;
-      const edgeKey2 = `${edge.target}->${edge.source}`;
-      const isLineageEdge = this.lineageEdgeKeys && (this.lineageEdgeKeys.has(edgeKey1) || this.lineageEdgeKeys.has(edgeKey2));
 
       if (isLineageEdge && !isArt) {
         // High-prominence illuminated golden thread showing full parent-to-child lineage

@@ -825,8 +825,10 @@ export class GlyphRenderer {
 
   // ═══════════ CANONICAL RADIAL KEYSTONE CROWN (ПОЯС ЗНАКОВ КАК НА КАРТИНКЕ) ═══════════
   drawRadialKeystoneCrown(ctx, orbitR, count = 16, strokeColor = '#141311') {
-    const step = (Math.PI * 2) / count;
-    const keystoneSize = Math.max(10, orbitR * 0.20);
+    if (orbitR < 20) return; // Skip rendering subpixel details when zoomed out
+    const actualCount = orbitR < 55 ? 8 : count;
+    const step = (Math.PI * 2) / actualCount;
+    const keystoneSize = Math.max(8, Math.min(22, orbitR * 0.20));
 
     ctx.save();
     ctx.strokeStyle = strokeColor;
@@ -835,7 +837,7 @@ export class GlyphRenderer {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < actualCount; i++) {
       const a = i * step;
       const kx = Math.cos(a) * orbitR;
       const ky = Math.sin(a) * orbitR;
