@@ -1,0 +1,29 @@
+{
+  "name": "wha-codebase-viewer",
+  "version": "1.0.0",
+  "description": "Witch Hat Atelier Codebase Viewer - Infinite Canvas Architectural Grimoire for React Projects",
+  "type": "module",
+  "main": "src/server/index.js",
+  "bin": {
+    "wha-viewer": "./bin/wha-viewer.js"
+  },
+  "scripts": {
+    "start": "node bin/wha-viewer.js",
+    "view:upline": "node bin/wha-viewer.js /Users/abdulrahmanabubakirov/Documents/upline_admin-module"
+  },
+  "keywords": [
+    "witch-hat-atelier",
+    "react",
+    "ast",
+    "code-visualization",
+    "infinite-canvas",
+    "architecture-viewer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/parser": "^7.26.9",
+    "@babel/traverse": "^7.26.9",
+    "chokidar": "^4.0.3"
+  }
+}
