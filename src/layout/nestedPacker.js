@@ -7,8 +7,8 @@ export class NestedPacker {
     const children = node.children || [];
 
     const baseRadius = node.metrics.radius;
-    // Expanded radius for Realistic Mode
-    const realisticRadius = Math.round(baseRadius * 1.42);
+    // Harmonious radius for Realistic Mode
+    const realisticRadius = Math.round(baseRadius * 1.25);
 
     const subSeals = [];
     const conduits = [];

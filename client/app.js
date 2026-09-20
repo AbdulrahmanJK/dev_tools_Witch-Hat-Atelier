@@ -114,50 +114,25 @@ class GrimoireApp {
   }
 
   bindUI() {
-    // Canvas Click & Hover Hit Testing
-    let clickStartPos = { x: 0, y: 0 };
-    let hasDragged = false;
-
-    this.viewport.addEventListener('pointerdown', (e) => {
-      clickStartPos = { x: e.clientX, y: e.clientY };
-      hasDragged = false;
-    });
-
-    this.viewport.addEventListener('pointerup', (e) => {
+    // Camera click callback: cleanly separated from dragging/panning
+    this.camera.onClick = (clientX, clientY) => {
       if (this.realisticMode) return; // Interactivity disabled in Art Mode!
 
-      const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
-      if (hasDragged || moved >= 6) {
-        // User was panning/dragging the canvas: DO NOT change, switch, or drop selection!
-        hasDragged = false;
-        return;
-      }
-
-      // Pure stationary click
-      const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
+      const hit = this.renderer.findNodeAt(clientX, clientY);
       if (hit) {
         const node = hit.node || hit;
         this.selectNode(node, hit.hitSubSeal);
       } else {
         this.deselect();
       }
-      this.requestRender();
-    });
-
-    this.viewport.addEventListener('pointercancel', () => {
-      hasDragged = false;
-    });
+    };
 
     this.viewport.addEventListener('pointermove', (e) => {
-      const moved = Math.hypot(e.clientX - clickStartPos.x, e.clientY - clickStartPos.y);
-      if (moved > 6) {
-        hasDragged = true;
-      }
-
-      if (this.camera.isDragging || hasDragged) {
+      if (this.camera.isDragging) {
         if (this.tooltip) this.tooltip.style.display = 'none';
         return; // Lock hover state while panning/dragging
       }
+
       if (this.realisticMode) {
         this.viewport.style.cursor = 'grab';
         if (this.tooltip) this.tooltip.style.display = 'none';
@@ -168,6 +143,20 @@ class GrimoireApp {
         return;
       }
 
+      // RULE: If an element is already selected, turn OFF hover highlighting!
+      if (this.renderer.selectedNodeId) {
+        if (this.tooltip) this.tooltip.style.display = 'none';
+        if (this.renderer.hoveredNodeId !== null) {
+          this.renderer.hoveredNodeId = null;
+          this.requestRender();
+        }
+        // Change cursor to pointer if hovering over another clickable node
+        const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
+        this.viewport.style.cursor = hit ? 'pointer' : 'grab';
+        return;
+      }
+
+      // NO ELEMENT SELECTED: Normal hover highlighting
       const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
       const node = hit ? (hit.node || hit) : null;
       const prevHovered = this.renderer.hoveredNodeId;
@@ -431,16 +420,23 @@ class GrimoireApp {
 
   selectNode(node, hitSubSeal = null) {
     this.renderer.selectedNodeId = node.id;
+    this.renderer.hoveredNodeId = null; // Clear hover state so selection is primary
+    if (this.tooltip) this.tooltip.style.display = 'none';
+
     const ancestry = this.getAncestryChain(node.id);
     const descendantTree = this.getDescendantTree(node.id);
     this.renderer.setHighlightedLineage(ancestry, descendantTree);
     this.openInspector(node, hitSubSeal, ancestry, descendantTree);
+    this.requestRender();
   }
 
   deselect() {
     this.renderer.selectedNodeId = null;
+    this.renderer.hoveredNodeId = null;
     this.renderer.clearHighlightedLineage();
     this.drawer.classList.remove('open');
+    if (this.tooltip) this.tooltip.style.display = 'none';
+    this.requestRender();
   }
 
   openInspector(node, hitSubSeal = null, ancestry = null, descendantTree = null) {
