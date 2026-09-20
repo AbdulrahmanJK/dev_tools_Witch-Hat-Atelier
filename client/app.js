@@ -13,6 +13,7 @@ class GrimoireApp {
     this.allNodes = [];
     this.activeFilter = 'all';
     this.realisticMode = false;
+    this.unifiedMode = false;
 
     this.drawer = document.getElementById('inspector-drawer');
     this.searchBox = document.getElementById('node-search');
@@ -136,6 +137,22 @@ class GrimoireApp {
       this.renderer.hoveredNodeId = node ? node.id : null;
       this.viewport.style.cursor = node ? 'pointer' : 'grab';
     });
+
+    // Unified Single Grand Spell Mode Toggle (Единый чертёж)
+    const toggleUnifiedBtn = document.getElementById('btn-toggle-unified');
+    if (toggleUnifiedBtn) {
+      toggleUnifiedBtn.addEventListener('click', () => {
+        this.unifiedMode = !this.unifiedMode;
+        toggleUnifiedBtn.classList.toggle('active', this.unifiedMode);
+        this.renderer.setUnifiedMode(this.unifiedMode);
+
+        if (this.unifiedMode && this.graphData?.unifiedLayout?.bounds) {
+          this.camera.fitBounds(this.graphData.unifiedLayout.bounds);
+        } else if (!this.unifiedMode && this.graphData?.bounds) {
+          this.camera.fitBounds(this.graphData.bounds);
+        }
+      });
+    }
 
     // Realistic Manga Art Mode Toggle
     const toggleRealBtn = document.getElementById('btn-toggle-realistic');
