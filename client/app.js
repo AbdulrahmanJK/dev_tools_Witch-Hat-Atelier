@@ -17,23 +17,34 @@ class GrimoireApp {
 
     this.drawer = document.getElementById('inspector-drawer');
     this.searchBox = document.getElementById('node-search');
+    this.tooltip = document.getElementById('hover-tooltip');
+
+    this.renderScheduled = false;
+    this.requestRender = () => {
+      if (!this.renderScheduled) {
+        this.renderScheduled = true;
+        requestAnimationFrame(() => {
+          this.renderScheduled = false;
+          this.renderer.render();
+          this.updateHUD();
+
+          if (this.camera.animating) {
+            this.requestRender();
+          }
+        });
+      }
+    };
 
     this.init();
   }
 
   async init() {
+    this.camera.onUpdate = () => this.requestRender();
     this.setupResize();
     this.bindUI();
     await this.loadData();
     this.setupLiveReload();
-
-    // Start render loop
-    const renderLoop = () => {
-      this.renderer.render();
-      this.updateHUD();
-      requestAnimationFrame(renderLoop);
-    };
-    requestAnimationFrame(renderLoop);
+    this.requestRender();
   }
 
   setupResize() {
@@ -48,6 +59,7 @@ class GrimoireApp {
       this.canvas.style.height = h + 'px';
 
       this.camera.resize(w, h);
+      this.requestRender();
     };
 
     window.addEventListener('resize', resize);
@@ -79,6 +91,7 @@ class GrimoireApp {
       } else if (this.graphData.bounds) {
         this.camera.fitBounds(this.graphData.bounds);
       }
+      this.requestRender();
     } catch (err) {
       console.error('Failed to load grimoire graph:', err);
       document.getElementById('project-stats-label').textContent = 'Error consulting archives (' + err.message + ')';
@@ -121,21 +134,52 @@ class GrimoireApp {
         } else {
           this.deselect();
         }
+        this.requestRender();
       }
     });
 
     this.viewport.addEventListener('pointermove', (e) => {
-      if (this.camera.isDragging) return;
+      if (this.camera.isDragging) {
+        if (this.tooltip) this.tooltip.style.display = 'none';
+        return;
+      }
       if (this.realisticMode) {
         this.viewport.style.cursor = 'grab';
-        this.renderer.hoveredNodeId = null;
+        if (this.tooltip) this.tooltip.style.display = 'none';
+        if (this.renderer.hoveredNodeId) {
+          this.renderer.hoveredNodeId = null;
+          this.requestRender();
+        }
         return;
       }
 
       const hit = this.renderer.findNodeAt(e.clientX, e.clientY);
       const node = hit ? (hit.node || hit) : null;
+      const prevHovered = this.renderer.hoveredNodeId;
       this.renderer.hoveredNodeId = node ? node.id : null;
       this.viewport.style.cursor = node ? 'pointer' : 'grab';
+
+      // Update hover tooltip
+      if (node && this.tooltip) {
+        this.tooltip.style.display = 'block';
+        this.tooltip.style.left = e.clientX + 'px';
+        this.tooltip.style.top = e.clientY + 'px';
+        this.tooltip.textContent = `✦ ${node.name} (${node.loc} LOC) • ${node.metrics.element}`;
+      } else if (this.tooltip) {
+        this.tooltip.style.display = 'none';
+      }
+
+      if (prevHovered !== this.renderer.hoveredNodeId) {
+        this.requestRender();
+      }
+    });
+
+    this.viewport.addEventListener('pointerleave', () => {
+      if (this.tooltip) this.tooltip.style.display = 'none';
+      if (this.renderer.hoveredNodeId) {
+        this.renderer.hoveredNodeId = null;
+        this.requestRender();
+      }
     });
 
     // Unified Single Grand Spell Mode Toggle (Единый чертёж)
@@ -151,6 +195,7 @@ class GrimoireApp {
         } else if (!this.unifiedMode && this.graphData?.bounds) {
           this.camera.fitBounds(this.graphData.bounds);
         }
+        this.requestRender();
       });
     }
 
@@ -169,6 +214,7 @@ class GrimoireApp {
           const selNode = this.allNodes.find((n) => n.id === this.renderer.selectedNodeId);
           if (selNode) this.openInspector(selNode);
         }
+        this.requestRender();
       });
     }
 
@@ -177,18 +223,23 @@ class GrimoireApp {
       const cx = this.camera.width / 2;
       const cy = this.camera.height / 2;
       this.camera.zoomAt(cx, cy, 1.25);
+      this.requestRender();
     });
 
     document.getElementById('btn-zoom-out').addEventListener('click', () => {
       const cx = this.camera.width / 2;
       const cy = this.camera.height / 2;
       this.camera.zoomAt(cx, cy, 0.8);
+      this.requestRender();
     });
 
     document.getElementById('btn-fit-world').addEventListener('click', () => {
-      if (this.graphData && this.graphData.bounds) {
+      if (this.unifiedMode && this.graphData?.unifiedLayout?.bounds) {
+        this.camera.fitBounds(this.graphData.unifiedLayout.bounds);
+      } else if (this.graphData && this.graphData.bounds) {
         this.camera.fitBounds(this.graphData.bounds);
       }
+      this.requestRender();
     });
 
     // Search bar
@@ -204,8 +255,10 @@ class GrimoireApp {
 
     this.searchBox.addEventListener('input', (e) => {
       const match = findMatchingNode(e.target.value);
-      if (match) {
-        this.renderer.hoveredNodeId = match.id;
+      const prev = this.renderer.hoveredNodeId;
+      this.renderer.hoveredNodeId = match ? match.id : null;
+      if (prev !== this.renderer.hoveredNodeId) {
+        this.requestRender();
       }
     });
 
@@ -215,6 +268,7 @@ class GrimoireApp {
         if (match) {
           this.selectNode(match);
           this.camera.focusNode(match, 0.9);
+          this.requestRender();
         }
       }
     });
@@ -227,12 +281,45 @@ class GrimoireApp {
         const el = btn.getAttribute('data-el');
         this.activeFilter = el;
         this.applyFilter();
+        this.requestRender();
       });
     });
 
     // Drawer Close
     document.getElementById('btn-close-drawer').addEventListener('click', () => {
       this.deselect();
+      this.requestRender();
+    });
+
+    // Keyboard Shortcuts for effortless navigation
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement === this.searchBox) return;
+
+      if (e.key === 'Escape') {
+        this.deselect();
+        this.requestRender();
+      } else if (e.key === 'f' || e.key === 'F') {
+        if (this.unifiedMode && this.graphData?.unifiedLayout?.bounds) {
+          this.camera.fitBounds(this.graphData.unifiedLayout.bounds);
+        } else if (this.graphData?.bounds) {
+          this.camera.fitBounds(this.graphData.bounds);
+        }
+        this.requestRender();
+      } else if (e.key === 'u' || e.key === 'U') {
+        if (toggleUnifiedBtn) toggleUnifiedBtn.click();
+      } else if (e.key === 'r' || e.key === 'R') {
+        if (toggleRealBtn) toggleRealBtn.click();
+      } else if (e.key === '+' || e.key === '=') {
+        const cx = this.camera.width / 2;
+        const cy = this.camera.height / 2;
+        this.camera.zoomAt(cx, cy, 1.25);
+        this.requestRender();
+      } else if (e.key === '-' || e.key === '_') {
+        const cx = this.camera.width / 2;
+        const cy = this.camera.height / 2;
+        this.camera.zoomAt(cx, cy, 0.8);
+        this.requestRender();
+      }
     });
   }
 
