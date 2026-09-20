@@ -135,24 +135,30 @@ export class GlyphRenderer {
     ctx.fillStyle = 'rgba(251, 249, 242, 0.72)';
     ctx.fill();
 
-    // 1. Delicate, fine hand-drawn ink ring (fine quill thickness: 1.0 - 2.0px)
-    const ringWidth = r > 250 ? 2.2 : r > 80 ? 1.4 : 1.0;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = ringWidth;
-    ctx.stroke();
+    // 1. Faceted Hexagonal Strengthen Ring for Class Components, or fine quill circular ring
+    const isClass = node.metrics?.geometry === 'faceted-strengthen' || node.metrics?.isClass;
+    if (isClass) {
+      this.drawFacetedStrengthenRing(ctx, r, WHA_THEMES.Mono, lod);
+    } else {
+      const ringWidth = r > 250 ? 2.2 : r > 80 ? 1.4 : 1.0;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = ringWidth;
+      ctx.stroke();
 
-    // Guideline circle for keystone orbit
-    ctx.beginPath();
-    ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
-    ctx.lineWidth = 0.7;
-    ctx.stroke();
+      // Guideline circle for keystone orbit
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.88, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+    }
 
-    // 2. Canonical Radial Keystone Crown (only on large circles or when zoomed in)
-    if (r >= 65 || lod >= 2) {
-      this.drawRadialKeystoneCrown(ctx, r * 0.76, r > 140 ? 16 : 8, ink);
+    // 2. Canonical Radial Keystone Crown from extracted code operations
+    if (r >= 45 || lod >= 1) {
+      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : (r > 140 ? 16 : 8);
+      this.drawRadialKeystoneCrown(ctx, r * 0.76, signs, ink);
 
       // Inner ring enclosing the center core
       ctx.beginPath();
@@ -534,12 +540,18 @@ export class GlyphRenderer {
     ctx.fillStyle = '#f8f5eb';
     ctx.fill();
 
-    // 1. Triple Compound Gear-Toothed Outer Ring
-    this.drawCompoundGearRing(ctx, r, theme, lod);
+    // 1. Triple Compound Gear-Toothed Outer Ring OR Faceted Strengthen Hexagon for Classes
+    const isClass = node.metrics?.geometry === 'faceted-strengthen' || node.metrics?.isClass;
+    if (isClass) {
+      this.drawFacetedStrengthenRing(ctx, r, theme, lod);
+    } else {
+      this.drawCompoundGearRing(ctx, r, theme, lod);
+    }
 
-    // 2. Canonical Radial Keystone Crown (matching user's image)
+    // 2. Canonical Radial Keystone Crown from extracted code operations
     if (lod >= 1) {
-      this.drawRadialKeystoneCrown(ctx, r * 0.82, 16, 'rgba(26, 25, 22, 0.75)');
+      const signs = (node.metrics?.radialSigns && node.metrics.radialSigns.length > 0) ? node.metrics.radialSigns : 16;
+      this.drawRadialKeystoneCrown(ctx, r * 0.82, signs, 'rgba(26, 25, 22, 0.75)');
     }
 
     // 3. Internal Conduits (Energy Pathways between sub-seals)
@@ -561,6 +573,81 @@ export class GlyphRenderer {
     }
 
     ctx.restore();
+  }
+
+  // ═══════════ FACETED HEXAGONAL STRENGTHEN RING FOR CLASSES ═══════════
+  drawFacetedStrengthenRing(ctx, r, theme, lod) {
+    const ink = '#141311';
+    const sides = 6;
+
+    // Outer Hexagon
+    ctx.beginPath();
+    for (let i = 0; i < sides; i++) {
+      const a = (i * Math.PI * 2) / sides - Math.PI / 2;
+      const x = r * Math.cos(a);
+      const y = r * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 3.4;
+    ctx.stroke();
+
+    // Middle Hexagon
+    ctx.beginPath();
+    for (let i = 0; i < sides; i++) {
+      const a = (i * Math.PI * 2) / sides - Math.PI / 2;
+      const x = (r - 7) * Math.cos(a);
+      const y = (r - 7) * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.65)';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // Inner dashed alignment circle
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 15, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(20, 19, 17, 0.35)';
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash([3, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Triangular Strengthen vertices at each corner (Canonical Strengthen geometry)
+    for (let i = 0; i < sides; i++) {
+      const a = (i * Math.PI * 2) / sides - Math.PI / 2;
+      const vx = (r - 2) * Math.cos(a);
+      const vy = (r - 2) * Math.sin(a);
+
+      ctx.save();
+      ctx.translate(vx, vy);
+      ctx.rotate(a + Math.PI / 2);
+
+      const ts = 9;
+      // Equilateral triangle
+      ctx.beginPath();
+      ctx.moveTo(0, -ts);
+      ctx.lineTo(-ts * 0.75, ts * 0.65);
+      ctx.lineTo(ts * 0.75, ts * 0.65);
+      ctx.closePath();
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+
+      // Horizontal line straight through middle of triangle
+      ctx.beginPath();
+      ctx.moveTo(-ts * 0.95, 0);
+      ctx.lineTo(ts * 0.95, 0);
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.restore();
+    }
   }
 
   // ═══════════ TRIPLE COMPOUND GEAR RING ═══════════
@@ -826,36 +913,65 @@ export class GlyphRenderer {
     }
   }
 
-  // ═══════════ CANONICAL RADIAL KEYSTONE CROWN (ПОЯС ЗНАКОВ КАК НА КАРТИНКЕ) ═══════════
-  drawRadialKeystoneCrown(ctx, orbitR, count = 16, strokeColor = '#141311') {
+  // ═══════════ CANONICAL RADIAL KEYSTONE CROWN (ПОЯС ЗНАКОВ ПО КОНСТРУКЦИЯМ КОДА) ═══════════
+  drawRadialKeystoneCrown(ctx, orbitR, signsOrCount = 16, strokeColor = '#141311') {
     if (orbitR < 20) return; // Skip rendering subpixel details when zoomed out
-    const actualCount = orbitR < 55 ? 8 : count;
-    const step = (Math.PI * 2) / actualCount;
-    const keystoneSize = Math.max(8, Math.min(22, orbitR * 0.20));
 
     ctx.save();
     ctx.strokeStyle = strokeColor;
     ctx.fillStyle = strokeColor;
-    ctx.lineWidth = 2.0;
+    ctx.lineWidth = 1.8;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    for (let i = 0; i < actualCount; i++) {
+    // 1. If an array of extracted code operations is provided
+    if (Array.isArray(signsOrCount) && signsOrCount.length > 0) {
+      const signs = signsOrCount;
+      const count = Math.min(32, signs.length);
+      const step = (Math.PI * 2) / count;
+
+      for (let i = 0; i < count; i++) {
+        const sign = signs[i];
+        const a = i * step - Math.PI / 2;
+        const kx = Math.cos(a) * orbitR;
+        const ky = Math.sin(a) * orbitR;
+        // Individual size dynamically scaled by LOC of the function / operation
+        const kSize = Math.max(8, Math.min(22, sign.size || orbitR * 0.18));
+
+        ctx.save();
+        ctx.translate(kx, ky);
+        ctx.rotate(a + Math.PI / 2);
+
+        // Draw canonical glyph from whaPaths (collection, orb, region, dispersion, convergence, repetition, bolt, column)
+        const drawn = drawCanonicalGlyph(ctx, sign.type, kSize);
+        if (!drawn) {
+          drawCanonicalGlyph(ctx, 'convergence', kSize);
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+      return;
+    }
+
+    // 2. Fallback alternating convergence / levitation crown
+    const actualCount = typeof signsOrCount === 'number' ? signsOrCount : 16;
+    const count = orbitR < 55 ? 8 : actualCount;
+    const step = (Math.PI * 2) / count;
+    const keystoneSize = Math.max(8, Math.min(22, orbitR * 0.20));
+
+    for (let i = 0; i < count; i++) {
       const a = i * step;
       const kx = Math.cos(a) * orbitR;
       const ky = Math.sin(a) * orbitR;
 
       ctx.save();
       ctx.translate(kx, ky);
-      // Rotate radially along the circle
       ctx.rotate(a + Math.PI / 2);
 
       const isEven = i % 2 === 0;
       if (isEven) {
-        // Triangle pointing inward toward center (Convergence) - exactly as in user image
         drawCanonicalGlyph(ctx, 'convergence', keystoneSize);
       } else {
-        // Arrow pointing outward with base tick (Levitation) - exactly as in user image
         drawCanonicalGlyph(ctx, 'levitation', keystoneSize);
       }
       ctx.restore();

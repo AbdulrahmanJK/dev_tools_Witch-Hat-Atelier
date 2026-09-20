@@ -51,6 +51,7 @@ export class GraphBuilder {
             filePath,
             antiPatterns: entities.antiPatterns,
             loc,
+            codeInventory: comp.codeInventory,
           });
 
           const node = {
@@ -66,6 +67,7 @@ export class GraphBuilder {
             children: comp.renderedChildren,
             reduxDispatches: comp.reduxDispatches,
             internalCircuit: comp.internalCircuit || { stateVariables: [], effects: [], handlers: [] },
+            codeInventory: comp.codeInventory,
             metrics,
             cluster,
           };

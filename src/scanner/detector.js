@@ -204,7 +204,51 @@ export function detectFileEntities(ast, code, filePath) {
     }
 
     // Traverse component body for hooks, JSX children, state vars, effects, and helper functions
+    const codeInventory = {
+      maps: [],
+      filters: [],
+      reduces: [],
+      forEaches: [],
+      loops: [],
+      arrays: 0,
+      sets: 0,
+      recordMaps: 0,
+      asyncCount: 0,
+      isClass: false,
+    };
+
     path.traverse({
+      ArrayExpression() {
+        codeInventory.arrays++;
+      },
+
+      NewExpression(nPath) {
+        const calleeName = nPath.node.callee?.name;
+        if (calleeName === 'Set') codeInventory.sets++;
+        if (calleeName === 'Map') codeInventory.recordMaps++;
+      },
+
+      ForStatement(lPath) {
+        const lLoc = lPath.node.loc ? lPath.node.loc.end.line - lPath.node.loc.start.line + 1 : 1;
+        codeInventory.loops.push(lLoc);
+      },
+      WhileStatement(lPath) {
+        const lLoc = lPath.node.loc ? lPath.node.loc.end.line - lPath.node.loc.start.line + 1 : 1;
+        codeInventory.loops.push(lLoc);
+      },
+      ForOfStatement(lPath) {
+        const lLoc = lPath.node.loc ? lPath.node.loc.end.line - lPath.node.loc.start.line + 1 : 1;
+        codeInventory.loops.push(lLoc);
+      },
+      ForInStatement(lPath) {
+        const lLoc = lPath.node.loc ? lPath.node.loc.end.line - lPath.node.loc.start.line + 1 : 1;
+        codeInventory.loops.push(lLoc);
+      },
+
+      AwaitExpression() {
+        codeInventory.asyncCount++;
+      },
+
       VariableDeclarator(vPath) {
         const id = vPath.node.id;
         const init = vPath.node.init;
@@ -253,10 +297,23 @@ export function detectFileEntities(ast, code, filePath) {
       CallExpression(cPath) {
         const callee = cPath.node.callee;
         let callName = '';
+        let methodName = '';
+
         if (callee.type === 'Identifier') {
           callName = callee.name;
         } else if (callee.type === 'MemberExpression') {
           callName = callee.property?.name || '';
+          methodName = callee.property?.name || '';
+        }
+
+        // Array method operations extraction (.map, .filter, .reduce, .forEach)
+        if (methodName) {
+          const arg0 = cPath.node.arguments[0];
+          const cbLoc = arg0?.loc ? arg0.loc.end.line - arg0.loc.start.line + 1 : 1;
+          if (methodName === 'map') codeInventory.maps.push(cbLoc);
+          else if (methodName === 'filter') codeInventory.filters.push(cbLoc);
+          else if (methodName === 'reduce') codeInventory.reduces.push(cbLoc);
+          else if (methodName === 'forEach') codeInventory.forEaches.push(cbLoc);
         }
 
         // Hook detection
@@ -335,6 +392,7 @@ export function detectFileEntities(ast, code, filePath) {
       renderedChildren: Array.from(renderedChildren),
       reduxDispatches,
       internalCircuit,
+      codeInventory,
     };
   }
 
@@ -342,6 +400,19 @@ export function detectFileEntities(ast, code, filePath) {
     const renderedChildren = new Set();
     const startLine = classNode.loc?.start?.line || 1;
     const endLine = classNode.loc?.end?.line || startLine;
+
+    const codeInventory = {
+      maps: [],
+      filters: [],
+      reduces: [],
+      forEaches: [],
+      loops: [],
+      arrays: 0,
+      sets: 0,
+      recordMaps: 0,
+      asyncCount: 0,
+      isClass: true,
+    };
 
     return {
       name: name || 'AnonymousClassComponent',
@@ -353,6 +424,8 @@ export function detectFileEntities(ast, code, filePath) {
       hooksUsed: [],
       renderedChildren: Array.from(renderedChildren),
       reduxDispatches: [],
+      internalCircuit: { stateVariables: [], effects: [], handlers: [] },
+      codeInventory,
     };
   }
 
