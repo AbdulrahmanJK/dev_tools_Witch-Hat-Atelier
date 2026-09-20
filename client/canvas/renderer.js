@@ -28,12 +28,32 @@ export class WorldRenderer {
     };
 
     this.realisticMode = false;
+    this.unifiedMode = false;
     this.lineageNodeIds = new Set();
     this.lineageEdgeKeys = new Set();
   }
 
   setRealisticMode(enabled) {
     this.realisticMode = !!enabled;
+  }
+
+  setUnifiedMode(enabled) {
+    this.unifiedMode = !!enabled;
+  }
+
+  getNodePos(node) {
+    if (this.unifiedMode && node.unifiedX !== undefined) {
+      return {
+        x: node.unifiedX,
+        y: node.unifiedY,
+        r: node.unifiedR || node.metrics.radius,
+      };
+    }
+    return {
+      x: node.x,
+      y: node.y,
+      r: node.realisticLayout ? node.realisticLayout.realisticRadius : node.metrics.radius,
+    };
   }
 
   setHighlightedLineage(ancestry = [], descendantTree = null) {
@@ -108,7 +128,7 @@ export class WorldRenderer {
     this.drawBackgroundCartography(ctx, vp, cam.zoom);
 
     // 2. Archipelago Territories (Cluster Halos & Labels)
-    if (this.layers.clusters) {
+    if (this.layers.clusters && !this.unifiedMode) {
       this.drawClusters(ctx, vp, lod);
     }
 
@@ -238,27 +258,30 @@ export class WorldRenderer {
       const t = this.nodeMap.get(edge.target);
       if (!s || !t) continue;
 
-      const minEx = Math.min(s.x, t.x);
-      const maxEx = Math.max(s.x, t.x);
-      const minEy = Math.min(s.y, t.y);
-      const maxEy = Math.max(s.y, t.y);
+      const sPos = this.getNodePos(s);
+      const tPos = this.getNodePos(t);
+
+      const minEx = Math.min(sPos.x, tPos.x);
+      const maxEx = Math.max(sPos.x, tPos.x);
+      const minEy = Math.min(sPos.y, tPos.y);
+      const maxEy = Math.max(sPos.y, tPos.y);
 
       if (maxEx < vp.minX || minEx > vp.maxX || maxEy < vp.minY || minEy > vp.maxY) {
         continue;
       }
 
-      const dx = t.x - s.x;
-      const dy = t.y - s.y;
+      const dx = tPos.x - sPos.x;
+      const dy = tPos.y - sPos.y;
       const dist = Math.hypot(dx, dy);
       const normalX = -dy / dist;
       const normalY = dx / dist;
       const curvature = Math.min(60, dist * 0.12);
-      const midX = (s.x + t.x) / 2 + normalX * curvature;
-      const midY = (s.y + t.y) / 2 + normalY * curvature;
+      const midX = (sPos.x + tPos.x) / 2 + normalX * curvature;
+      const midY = (sPos.y + tPos.y) / 2 + normalY * curvature;
 
       ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.quadraticCurveTo(midX, midY, t.x, t.y);
+      ctx.moveTo(sPos.x, sPos.y);
+      ctx.quadraticCurveTo(midX, midY, tPos.x, tPos.y);
 
       const edgeKey1 = `${edge.source}->${edge.target}`;
       const edgeKey2 = `${edge.target}->${edge.source}`;
@@ -283,10 +306,10 @@ export class WorldRenderer {
 
         // Draw small arrowhead along tangent
         if (lod >= 1) {
-          const tAng = Math.atan2(t.y - midY, t.x - midX);
-          const tr = (t.realisticLayout?.realisticRadius || t.metrics.radius) + 4;
-          const ax = t.x - Math.cos(tAng) * tr;
-          const ay = t.y - Math.sin(tAng) * tr;
+          const tAng = Math.atan2(tPos.y - midY, tPos.x - midX);
+          const tr = tPos.r + 4;
+          const ax = tPos.x - Math.cos(tAng) * tr;
+          const ay = tPos.y - Math.sin(tAng) * tr;
 
           ctx.beginPath();
           ctx.moveTo(ax, ay);
@@ -330,10 +353,17 @@ export class WorldRenderer {
       });
     }
 
-    for (const node of this.nodes) {
-      const r = node.realisticLayout ? node.realisticLayout.realisticRadius : node.metrics.radius;
+    let renderList = [...this.nodes];
+    if (this.unifiedMode) {
+      // In Unified mode: Sort by radius descending so parents are drawn first, then children inside!
+      renderList.sort((a, b) => (b.unifiedR || 0) - (a.unifiedR || 0));
+    }
 
-      if (node.x + r + 40 < vp.minX || node.x - r - 40 > vp.maxX || node.y + r + 40 < vp.minY || node.y - r - 40 > vp.maxY) {
+    for (const node of renderList) {
+      const pos = this.getNodePos(node);
+      const r = pos.r;
+
+      if (pos.x + r + 40 < vp.minX || pos.x - r - 40 > vp.maxX || pos.y + r + 40 < vp.minY || pos.y - r - 40 > vp.maxY) {
         continue;
       }
 
@@ -345,7 +375,7 @@ export class WorldRenderer {
       // Draw subtle golden lineage aura on parent/child nodes in the transition chain
       if (isLineageNode && !isSelected && !isHovered) {
         ctx.save();
-        ctx.translate(node.x, node.y);
+        ctx.translate(pos.x, pos.y);
         ctx.beginPath();
         ctx.arc(0, 0, r + 10, 0, Math.PI * 2);
         ctx.strokeStyle = '#c48b26';
@@ -360,8 +390,17 @@ export class WorldRenderer {
         ctx.globalAlpha = 0.22;
       }
 
+      // Create proxy with active positioning
+      const drawNodeProxy = {
+        ...node,
+        x: pos.x,
+        y: pos.y,
+        metrics: { ...node.metrics, radius: r },
+        realisticLayout: node.realisticLayout ? { ...node.realisticLayout, realisticRadius: r } : null,
+      };
+
       // Pass isArt to renderNode: when true, renders purely as black & white draftsman art!
-      this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered, isArt);
+      this.glyphRenderer.renderNode(ctx, drawNodeProxy, lod, isSelected, isHovered, isArt);
       ctx.restore();
     }
   }
@@ -411,15 +450,22 @@ export class WorldRenderer {
     }
 
     const worldPos = this.camera.screenToWorld(screenX, screenY);
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const node = this.nodes[i];
-      const r = node.realisticLayout ? node.realisticLayout.realisticRadius : node.metrics.radius;
-      const dist = Math.hypot(worldPos.x - node.x, worldPos.y - node.y);
-      if (dist <= r + 8) {
+    let hitList = [...this.nodes];
+    if (this.unifiedMode) {
+      // In unified mode, hit-test smallest/innermost children first!
+      hitList.sort((a, b) => (a.unifiedR || a.metrics.radius) - (b.unifiedR || b.metrics.radius));
+    } else {
+      hitList.reverse();
+    }
+
+    for (const node of hitList) {
+      const pos = this.getNodePos(node);
+      const dist = Math.hypot(worldPos.x - pos.x, worldPos.y - pos.y);
+      if (dist <= pos.r + 8) {
         let hitSubSeal = null;
         if (node.realisticLayout?.subSeals) {
           for (const sub of node.realisticLayout.subSeals) {
-            const subDist = Math.hypot(worldPos.x - (node.x + sub.dx), worldPos.y - (node.y + sub.dy));
+            const subDist = Math.hypot(worldPos.x - (pos.x + sub.dx), worldPos.y - (pos.y + sub.dy));
             if (subDist <= sub.radius) {
               hitSubSeal = sub;
               break;

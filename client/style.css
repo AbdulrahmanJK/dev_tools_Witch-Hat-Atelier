@@ -200,6 +200,13 @@ html, body {
   box-shadow: 0 0 14px rgba(20, 19, 17, 0.40);
 }
 
+#btn-toggle-unified.active {
+  background: #c48b26;
+  color: #fbf9f2;
+  border-color: #c48b26;
+  box-shadow: 0 0 12px rgba(196, 139, 38, 0.40);
+}
+
 #btn-toggle-realistic.active .mode-icon {
   animation: spin 8s linear infinite;
 }

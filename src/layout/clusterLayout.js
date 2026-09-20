@@ -1,10 +1,12 @@
 import { NestedPacker } from './nestedPacker.js';
+import { UnifiedFractalLayout } from './unifiedFractalLayout.js';
 
 export class ClusterLayout {
   constructor(options = {}) {
     this.padding = options.padding || 36;
     this.clusterSpacing = options.clusterSpacing || 380;
     this.nestedPacker = new NestedPacker();
+    this.unifiedPacker = new UnifiedFractalLayout();
   }
 
   computeLayout(graph) {
@@ -49,13 +51,31 @@ export class ClusterLayout {
       });
     }
 
-    // 4. Return graph enriched with (x, y) coordinates
+    // Compute Unified Single Grand Spell Fractal Layout
+    const unifiedResult = this.unifiedPacker.computeUnifiedLayout(graph);
+    const unifiedMap = new Map(unifiedResult.nodes.map((n) => [n.id, n]));
+
+    layoutNodes.forEach((n) => {
+      const uNode = unifiedMap.get(n.id);
+      if (uNode) {
+        n.unifiedX = uNode.unifiedX;
+        n.unifiedY = uNode.unifiedY;
+        n.unifiedR = uNode.unifiedR;
+      }
+    });
+
+    // 4. Return graph enriched with both layout modes
     return {
       nodes: layoutNodes,
       edges,
       clusters: layoutClusters,
       bounds: this.calculateOverallBounds(layoutNodes, layoutClusters),
       stats: graph.stats,
+      unifiedLayout: {
+        rootId: unifiedResult.rootId,
+        rootRadius: unifiedResult.rootRadius,
+        bounds: unifiedResult.bounds,
+      },
     };
   }
 
