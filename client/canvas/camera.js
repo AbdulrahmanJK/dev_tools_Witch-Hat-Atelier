@@ -26,6 +26,19 @@ export class Camera {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
   }
 
+  clientToCanvas(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    };
+  }
+
+  clientToWorld(clientX, clientY) {
+    const c = this.clientToCanvas(clientX, clientY);
+    return this.screenToWorld(c.x, c.y);
+  }
+
   screenToWorld(sx, sy) {
     const cx = this.width / 2;
     const cy = this.height / 2;
@@ -61,11 +74,11 @@ export class Camera {
     return 2; // Close inspection with keystones & runes
   }
 
-  zoomAt(sx, sy, deltaFactor) {
-    const before = this.screenToWorld(sx, sy);
+  zoomAt(clientX, clientY, deltaFactor) {
+    const before = this.clientToWorld(clientX, clientY);
     const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * deltaFactor));
     this.zoom = newZoom;
-    const after = this.screenToWorld(sx, sy);
+    const after = this.clientToWorld(clientX, clientY);
 
     this.x += before.x - after.x;
     this.y += before.y - after.y;
