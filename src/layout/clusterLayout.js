@@ -74,6 +74,7 @@ export class ClusterLayout {
       unifiedLayout: {
         rootId: unifiedResult.rootId,
         rootRadius: unifiedResult.rootRadius,
+        mandalaSectors: unifiedResult.mandalaSectors,
         bounds: unifiedResult.bounds,
       },
     };

@@ -31,6 +31,8 @@ export class WorldRenderer {
     this.unifiedMode = false;
     this.lineageNodeIds = new Set();
     this.lineageEdgeKeys = new Set();
+    this.mandalaSectors = [];
+    this.rootRadius = 1140;
   }
 
   setRealisticMode(enabled) {
@@ -39,6 +41,15 @@ export class WorldRenderer {
 
   setUnifiedMode(enabled) {
     this.unifiedMode = !!enabled;
+  }
+
+  setData(data) {
+    this.nodes = data.nodes || [];
+    this.edges = data.edges || [];
+    this.clusters = data.clusters || [];
+    this.nodeMap = new Map(this.nodes.map((n) => [n.id, n]));
+    this.mandalaSectors = data.unifiedLayout?.mandalaSectors || [];
+    this.rootRadius = data.unifiedLayout?.rootRadius || 1140;
   }
 
   getNodePos(node) {
@@ -127,8 +138,14 @@ export class WorldRenderer {
     // 1. Ancient Cartography Grid & Cardinal Crosshair
     this.drawBackgroundCartography(ctx, vp, cam.zoom);
 
-    // 2. Archipelago Territories (Cluster Halos & Labels)
-    if (this.layers.clusters && !this.unifiedMode) {
+    // 2. In Unified Grand Seal mode: Draw Master Enclosing Ring & Domain Mandala
+    if (this.unifiedMode) {
+      this.drawGrandMasterCircle(ctx, this.rootRadius, lod);
+      if (lod <= 1) {
+        this.drawMandalaSectors(ctx, this.mandalaSectors, this.rootRadius);
+      }
+    } else if (this.layers.clusters) {
+      // Classic Archipelago Territories
       this.drawClusters(ctx, vp, lod);
     }
 
@@ -146,6 +163,68 @@ export class WorldRenderer {
     if (this.realisticMode) {
       this.drawArtFrameVignette(ctx, w, h);
     }
+  }
+
+  drawGrandMasterCircle(ctx, r, lod) {
+    const isArt = this.realisticMode;
+    const ink = '#141311';
+
+    // 1. Triple colossal master ring of App enclosing the entire application
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = isArt ? ink : '#3a342a';
+    ctx.lineWidth = 4.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 8, 0, Math.PI * 2);
+    ctx.strokeStyle = isArt ? 'rgba(20, 19, 17, 0.65)' : 'rgba(196, 139, 38, 0.65)';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // 64 Master clockwork teeth along the master circle
+    for (let i = 0; i < 64; i++) {
+      const a = (i * Math.PI * 2) / 64;
+      const isCard = i % 16 === 0;
+      const len = isCard ? 20 : i % 4 === 0 ? 12 : 6;
+      ctx.beginPath();
+      ctx.moveTo((r - 2) * Math.cos(a), (r - 2) * Math.sin(a));
+      ctx.lineTo((r - len) * Math.cos(a), (r - len) * Math.sin(a));
+      ctx.strokeStyle = isArt ? ink : '#3a342a';
+      ctx.lineWidth = isCard ? 3.0 : 1.2;
+      ctx.stroke();
+    }
+
+    // 4 Diagonal dividing rays separating the Sacred Domain Sectors (North, East, South, West)
+    const diagAngles = [-Math.PI * 0.75, -Math.PI * 0.25, Math.PI * 0.25, Math.PI * 0.75];
+    diagAngles.forEach((a) => {
+      ctx.beginPath();
+      ctx.moveTo(120 * Math.cos(a), 120 * Math.sin(a));
+      ctx.lineTo((r - 12) * Math.cos(a), (r - 12) * Math.sin(a));
+      ctx.strokeStyle = isArt ? 'rgba(20, 19, 17, 0.22)' : 'rgba(196, 139, 38, 0.25)';
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([6, 8]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  drawMandalaSectors(ctx, sectors, rootR) {
+    if (!sectors || sectors.length === 0) return;
+    const isArt = this.realisticMode;
+
+    ctx.save();
+    sectors.forEach((sec) => {
+      const x = Math.cos(sec.angle) * sec.radius;
+      const y = Math.sin(sec.angle) * sec.radius;
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `italic 700 20px 'Palatino Linotype', 'Book Antiqua', Georgia, serif`;
+      ctx.fillStyle = isArt ? 'rgba(20, 19, 17, 0.65)' : 'rgba(184, 58, 20, 0.75)';
+      ctx.fillText(`✦ ${sec.name} ✦`, x, y);
+    });
+    ctx.restore();
   }
 
   drawBackgroundCartography(ctx, vp, zoom) {
