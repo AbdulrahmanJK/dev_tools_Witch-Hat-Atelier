@@ -109,7 +109,16 @@ export class Camera {
     this.animateTo(node.x, node.y, targetZoom);
   }
 
+  stopAnimation() {
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    this.animating = false;
+  }
+
   animateTo(targetX, targetY, targetZoom, duration = 400) {
+    this.stopAnimation();
     const startX = this.x;
     const startY = this.y;
     const startZoom = this.zoom;
@@ -129,13 +138,15 @@ export class Camera {
       if (this.onUpdate) this.onUpdate();
 
       if (progress < 1) {
-        requestAnimationFrame(tick);
+        this.animationFrameId = requestAnimationFrame(tick);
       } else {
+        this.animationFrameId = null;
         this.animating = false;
+        if (this.onUpdate) this.onUpdate();
       }
     };
 
-    requestAnimationFrame(tick);
+    this.animationFrameId = requestAnimationFrame(tick);
   }
 
   bindEvents() {
@@ -145,6 +156,7 @@ export class Camera {
       'wheel',
       (e) => {
         e.preventDefault();
+        this.stopAnimation();
         const factor = e.deltaY < 0 ? 1.12 : 0.89;
         this.zoomAt(e.clientX, e.clientY, factor);
       },
@@ -152,6 +164,7 @@ export class Camera {
     );
 
     el.addEventListener('pointerdown', (e) => {
+      this.stopAnimation();
       this.isDragging = true;
       this.hasMoved = false;
       this.dragStart = { x: e.clientX, y: e.clientY };

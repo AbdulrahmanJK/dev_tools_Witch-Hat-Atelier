@@ -18,20 +18,21 @@ class GrimoireApp {
     this.drawer = document.getElementById('inspector-drawer');
     this.searchBox = document.getElementById('node-search');
     this.tooltip = document.getElementById('hover-tooltip');
+    this.zoomTextEl = document.getElementById('zoom-text');
+    this.lastZoomPct = -1;
 
     this.renderScheduled = false;
     this.requestRender = () => {
       if (!this.renderScheduled) {
         this.renderScheduled = true;
-        requestAnimationFrame(() => {
+        requestAnimationFrame((time) => {
           this.renderScheduled = false;
-          this.renderer.render();
+          this.renderer.render(time);
           this.updateHUD();
 
-          // Keep animating smoothly at 60 FPS while camera is moving, or when lines/auras are active!
+          // Animate continuously at 60 FPS ONLY when an element is actively SELECTED in interactive mode!
           const hasActiveAnimation =
-            this.camera.animating ||
-            (!this.realisticMode && (this.renderer.selectedNodeId || this.renderer.hoveredNodeId));
+            !this.realisticMode && !!this.renderer.selectedNodeId;
 
           if (hasActiveAnimation) {
             this.requestRender();
@@ -698,7 +699,12 @@ class GrimoireApp {
 
   updateHUD() {
     const zoomPct = Math.round(this.camera.zoom * 100);
-    document.getElementById('zoom-text').textContent = zoomPct + '%';
+    if (this.lastZoomPct !== zoomPct) {
+      this.lastZoomPct = zoomPct;
+      if (this.zoomTextEl) {
+        this.zoomTextEl.textContent = zoomPct + '%';
+      }
+    }
   }
 }
 

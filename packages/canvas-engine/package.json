@@ -1,0 +1,25 @@
+{
+  "name": "@wha/canvas-engine",
+  "version": "1.0.0",
+  "description": "Headless high-performance Canvas 2D infinite canvas engine for Witch Hat Atelier Grimoire",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wha/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
