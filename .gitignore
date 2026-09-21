@@ -1,6 +1,15 @@
 node_modules
+*/node_modules
+packages/*/node_modules
+dist
+*/dist
+packages/*/dist
+build
+.pnpm-store
 .mnemon
 .DS_Store
+*.log
+.vite
 
 # wrangler files
 .wrangler

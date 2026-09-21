@@ -1,0 +1,23 @@
+{
+  "name": "@wha/cli",
+  "version": "1.0.0",
+  "description": "CLI launcher and local HTTP/SSE server for Witch Hat Atelier Grimoire",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "wha-viewer": "./bin/wha-viewer.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node ./bin/wha-viewer.js"
+  },
+  "dependencies": {
+    "@wha/core": "workspace:*",
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

@@ -46,6 +46,11 @@ export class GlyphRenderer {
   constructor() {
     this.inkColor = '#141311';
     this.guideColor = 'rgba(20, 19, 17, 0.14)';
+    this.auraDashOffset = 0;
+  }
+
+  setAuraDashOffset(offset) {
+    this.auraDashOffset = offset;
   }
 
   // ═══════════ MAIN NODE RENDERER ═══════════
@@ -533,7 +538,7 @@ export class GlyphRenderer {
       ctx.strokeStyle = theme.stroke;
       ctx.lineWidth = 2.4;
       ctx.setLineDash([5, 5]);
-      ctx.lineDashOffset = -(performance.now() / 1000 * 15) % 10;
+      ctx.lineDashOffset = isSelected ? (this.auraDashOffset || 0) : 0;
       ctx.stroke();
       ctx.setLineDash([]);
     }

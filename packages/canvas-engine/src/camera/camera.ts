@@ -1,0 +1,233 @@
+import type { SealNode } from '@wha/core';
+
+export interface ViewportBounds {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export class Camera {
+  public x = 0;
+  public y = 0;
+  public zoom = 0.45;
+  public minZoom = 0.04;
+  public maxZoom = 4.0;
+  public width = 1000;
+  public height = 800;
+  public dpr = 1;
+
+  public isDragging = false;
+  public hasMoved = false;
+  public animating = false;
+
+  private dragStart = { x: 0, y: 0 };
+  private dragLast = { x: 0, y: 0 };
+  private animationFrameId: number | null = null;
+  private canvas: HTMLCanvasElement;
+  private unbindEvents: (() => void) | null = null;
+
+  public onUpdate: (() => void) | null = null;
+  public onClick: ((e: PointerEvent, worldPos: { x: number; y: number }) => void) | null = null;
+  public onHover: ((worldPos: { x: number; y: number }) => void) | null = null;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    this.dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+    this.bindEvents();
+  }
+
+  public resize(w: number, h: number): void {
+    this.width = w;
+    this.height = h;
+    this.dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+  }
+
+  public screenToWorld(sx: number, sy: number): { x: number; y: number } {
+    return {
+      x: (sx - this.width / 2) / this.zoom + this.x,
+      y: (sy - this.height / 2) / this.zoom + this.y,
+    };
+  }
+
+  public worldToScreen(wx: number, wy: number): { x: number; y: number } {
+    return {
+      x: (wx - this.x) * this.zoom + this.width / 2,
+      y: (wy - this.y) * this.zoom + this.height / 2,
+    };
+  }
+
+  public getViewportBounds(): ViewportBounds {
+    const halfW = this.width / (2 * this.zoom);
+    const halfH = this.height / (2 * this.zoom);
+    const margin = 200; // Extra buffer to eliminate edge clipping
+    return {
+      x1: this.x - halfW - margin,
+      y1: this.y - halfH - margin,
+      x2: this.x + halfW + margin,
+      y2: this.y + halfH + margin,
+    };
+  }
+
+  public getLOD(): 0 | 1 | 2 {
+    if (this.zoom < 0.22) return 0; // Far: simplified symbols
+    if (this.zoom < 0.65) return 1; // Mid: standard symbols without tiny sub-text
+    return 2; // Close: full intricate ink glyphs and details
+  }
+
+  public zoomAt(cursorX: number, cursorY: number, factor: number): void {
+    const prevZoom = this.zoom;
+    const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * factor));
+    if (newZoom === prevZoom) return;
+
+    // Zoom centered towards mouse cursor
+    const wx = (cursorX - this.width / 2) / prevZoom + this.x;
+    const wy = (cursorY - this.height / 2) / prevZoom + this.y;
+
+    this.zoom = newZoom;
+    this.x = wx - (cursorX - this.width / 2) / this.zoom;
+    this.y = wy - (cursorY - this.height / 2) / this.zoom;
+
+    if (this.onUpdate) this.onUpdate();
+  }
+
+  public fitBounds(bounds: { minX: number; minY: number; maxX: number; maxY: number }): void {
+    this.stopAnimation();
+    const w = Math.max(100, bounds.maxX - bounds.minX);
+    const h = Math.max(100, bounds.maxY - bounds.minY);
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+
+    const padding = 140;
+    const zoomX = (this.width - padding) / w;
+    const zoomY = (this.height - padding) / h;
+    const targetZoom = Math.max(this.minZoom, Math.min(0.85, Math.min(zoomX, zoomY)));
+
+    this.animateTo(cx, cy, targetZoom);
+  }
+
+  public focusOnNode(node: SealNode, targetZoom = 0.9): void {
+    this.animateTo(node.x, node.y, targetZoom);
+  }
+
+  public stopAnimation(): void {
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    this.animating = false;
+  }
+
+  public animateTo(targetX: number, targetY: number, targetZoom: number, duration = 400): void {
+    this.stopAnimation();
+    const startX = this.x;
+    const startY = this.y;
+    const startZoom = this.zoom;
+    const startTime = performance.now();
+
+    this.animating = true;
+
+    const tick = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Ease out cubic
+      const ease = 1 - Math.pow(1 - progress, 3);
+
+      this.x = startX + (targetX - startX) * ease;
+      this.y = startY + (targetY - startY) * ease;
+      this.zoom = startZoom + (targetZoom - startZoom) * ease;
+
+      if (this.onUpdate) this.onUpdate();
+
+      if (progress < 1) {
+        this.animationFrameId = requestAnimationFrame(tick);
+      } else {
+        this.animationFrameId = null;
+        this.animating = false;
+        if (this.onUpdate) this.onUpdate();
+      }
+    };
+
+    this.animationFrameId = requestAnimationFrame(tick);
+  }
+
+  private bindEvents(): void {
+    const el = this.canvas;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      this.stopAnimation();
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      this.zoomAt(e.clientX, e.clientY, factor);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      this.stopAnimation();
+      this.isDragging = true;
+      this.hasMoved = false;
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      this.dragLast = { x: e.clientX, y: e.clientY };
+      el.setPointerCapture(e.pointerId);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (this.isDragging) {
+        const dx = e.clientX - this.dragLast.x;
+        const dy = e.clientY - this.dragLast.y;
+
+        // Pan lock threshold
+        const totalDist = Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y);
+        if (totalDist > 5) {
+          this.hasMoved = true;
+        }
+
+        this.x -= dx / this.zoom;
+        this.y -= dy / this.zoom;
+        this.dragLast = { x: e.clientX, y: e.clientY };
+
+        if (this.onUpdate) this.onUpdate();
+      } else if (this.onHover) {
+        const rect = el.getBoundingClientRect();
+        const worldPos = this.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+        this.onHover(worldPos);
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!this.isDragging) return;
+      this.isDragging = false;
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer was lost
+      }
+
+      // If user did not drag, trigger click
+      if (!this.hasMoved && this.onClick) {
+        const rect = el.getBoundingClientRect();
+        const worldPos = this.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+        this.onClick(e, worldPos);
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    this.unbindEvents = () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+  }
+
+  public destroy(): void {
+    this.stopAnimation();
+    if (this.unbindEvents) {
+      this.unbindEvents();
+      this.unbindEvents = null;
+    }
+  }
+}

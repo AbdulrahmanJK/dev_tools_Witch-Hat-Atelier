@@ -50,6 +50,15 @@ export class WorldRenderer {
     this.nodeMap = new Map(this.nodes.map((n) => [n.id, n]));
     this.mandalaSectors = data.unifiedLayout?.mandalaSectors || [];
     this.rootRadius = data.unifiedLayout?.rootRadius || 1140;
+
+    // Pre-calculate edge keys once so we don't allocate strings every frame
+    this.edges.forEach((e) => {
+      e._key1 = `${e.source}->${e.target}`;
+      e._key2 = `${e.target}->${e.source}`;
+    });
+
+    // Pre-sort nodes for unified mode once so we don't sort every frame at 60 FPS
+    this.sortedUnifiedNodes = [...this.nodes].sort((a, b) => (b.unifiedR || 0) - (a.unifiedR || 0));
   }
 
   getNodePos(node) {
@@ -114,14 +123,13 @@ export class WorldRenderer {
     this.lineageEdgeKeys = new Set();
   }
 
-  setData(data) {
-    this.nodes = data.nodes || [];
-    this.edges = data.edges || [];
-    this.clusters = data.clusters || [];
-    this.nodeMap = new Map(this.nodes.map((n) => [n.id, n]));
-  }
+  render(time = performance.now()) {
+    this.animTime = time;
+    const nowSec = time / 1000;
+    this.pulseOffset = (nowSec * 24) % 12;
+    this.auraDashOffset = -((nowSec * 15) % 10);
+    this.glyphRenderer.setAuraDashOffset(this.auraDashOffset);
 
-  render() {
     const ctx = this.ctx;
     const cam = this.camera;
     const dpr = cam.dpr;
@@ -333,20 +341,8 @@ export class WorldRenderer {
     if (this.realisticMode) return;
 
     const isArt = this.realisticMode;
-    // Delta-time based continuous fluid animation:
-    // Pattern [8, 4] has exact period of 12px. Speed is 24px/sec -> 100% mathematically continuous, ZERO stutter/jerk!
-    const nowSec = performance.now() / 1000;
-    const pulseOffset = (nowSec * 24) % 12;
-
+    const pulseOffset = this.pulseOffset;
     const activeNodeId = isArt ? null : (this.selectedNodeId || this.hoveredNodeId);
-    const connectedNodeIds = new Set();
-    if (activeNodeId) {
-      connectedNodeIds.add(activeNodeId);
-      this.edges.forEach((e) => {
-        if (e.source === activeNodeId) connectedNodeIds.add(e.target);
-        if (e.target === activeNodeId) connectedNodeIds.add(e.source);
-      });
-    }
 
     for (const edge of this.edges) {
       const s = this.nodeMap.get(edge.source);
@@ -365,9 +361,8 @@ export class WorldRenderer {
         continue;
       }
 
-      const edgeKey1 = `${edge.source}->${edge.target}`;
-      const edgeKey2 = `${edge.target}->${edge.source}`;
-      const isLineageEdge = this.lineageEdgeKeys && (this.lineageEdgeKeys.has(edgeKey1) || this.lineageEdgeKeys.has(edgeKey2));
+      // Lineage edge is ONLY active in Unified Grand Seal mode!
+      const isLineageEdge = this.unifiedMode && this.lineageEdgeKeys && (this.lineageEdgeKeys.has(edge._key1) || this.lineageEdgeKeys.has(edge._key2));
 
       // Fast straight-line path for distant zoom
       if (lod === 0 && !isLineageEdge) {
@@ -450,20 +445,17 @@ export class WorldRenderer {
   drawNodes(ctx, vp, lod) {
     const isArt = this.realisticMode;
     const activeNodeId = isArt ? null : (this.selectedNodeId || this.hoveredNodeId);
+
+    // In default mode: find direct neighbors connected to active node
     const connectedNodeIds = new Set();
-    if (activeNodeId) {
-      connectedNodeIds.add(activeNodeId);
-      this.edges.forEach((e) => {
+    if (activeNodeId && !this.unifiedMode) {
+      for (const e of this.edges) {
         if (e.source === activeNodeId) connectedNodeIds.add(e.target);
         if (e.target === activeNodeId) connectedNodeIds.add(e.source);
-      });
+      }
     }
 
-    let renderList = [...this.nodes];
-    if (this.unifiedMode) {
-      // In Unified mode: Sort by radius descending so parents are drawn first, then children inside!
-      renderList.sort((a, b) => (b.unifiedR || 0) - (a.unifiedR || 0));
-    }
+    const renderList = this.unifiedMode ? (this.sortedUnifiedNodes || this.nodes) : this.nodes;
 
     for (const node of renderList) {
       const pos = this.getNodePos(node);
@@ -475,10 +467,21 @@ export class WorldRenderer {
 
       const isSelected = !isArt && node.id === this.selectedNodeId;
       const isHovered = !isArt && !this.selectedNodeId && node.id === this.hoveredNodeId;
-      const isLineageNode = !isArt && this.lineageNodeIds && this.lineageNodeIds.has(node.id);
+      const isConnected = !isArt && !this.unifiedMode && !!activeNodeId && connectedNodeIds.has(node.id);
 
-      // Draw subtle golden lineage aura on parent/child nodes in the transition chain
-      if (isLineageNode && !isSelected && !isHovered) {
+      // In Unified Mode: lineage nodes from the mandala chain
+      // In Default Mode: ONLY nodes directly connected to activeNodeId!
+      const shouldShowAura = !isArt && !isSelected && !isHovered && (
+        this.unifiedMode
+          ? (this.lineageNodeIds && this.lineageNodeIds.has(node.id))
+          : isConnected
+      );
+
+      // In Default Mode: when an element is active, dim and gray out unconnected nodes
+      const isDimmed = !isArt && !this.unifiedMode && !!activeNodeId && !isSelected && !isConnected && !isHovered;
+
+      // Draw subtle golden lineage aura on connected nodes
+      if (shouldShowAura) {
         ctx.save();
         ctx.translate(pos.x, pos.y);
         ctx.beginPath();
@@ -486,25 +489,37 @@ export class WorldRenderer {
         ctx.strokeStyle = '#c48b26';
         ctx.lineWidth = 2.2;
         ctx.setLineDash([5, 5]);
-        ctx.lineDashOffset = -(performance.now() / 1000 * 15) % 10;
+        ctx.lineDashOffset = this.auraDashOffset;
         ctx.stroke();
         ctx.restore();
       }
 
       ctx.save();
-      ctx.globalAlpha = 1.0; // Keep ALL nodes 100% visible and clear! No washed-out dimming!
+      if (isDimmed) {
+        ctx.globalAlpha = 0.78;
+        ctx.filter = 'grayscale(55%)';
+      } else {
+        ctx.globalAlpha = 1.0;
+        ctx.filter = 'none';
+      }
 
-      // Create proxy with active positioning
-      const drawNodeProxy = {
-        ...node,
-        x: pos.x,
-        y: pos.y,
-        metrics: { ...node.metrics, radius: r },
-        realisticLayout: node.realisticLayout ? { ...node.realisticLayout, realisticRadius: r } : null,
-      };
+      // Direct coordinate injection without proxy object allocations
+      const origX = node.x;
+      const origY = node.y;
+      const origR = node.metrics?.radius || 50;
+      if (this.unifiedMode) {
+        node.x = pos.x;
+        node.y = pos.y;
+        if (node.metrics) node.metrics.radius = r;
+      }
 
-      // Pass isArt and isLineageNode to renderNode
-      this.glyphRenderer.renderNode(ctx, drawNodeProxy, lod, isSelected, isHovered, isArt, isLineageNode);
+      this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered, isArt, shouldShowAura);
+
+      if (this.unifiedMode) {
+        node.x = origX;
+        node.y = origY;
+        if (node.metrics) node.metrics.radius = origR;
+      }
       ctx.restore();
     }
   }

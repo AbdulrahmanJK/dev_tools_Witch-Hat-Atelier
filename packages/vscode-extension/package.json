@@ -1,0 +1,58 @@
+{
+  "name": "wha-vscode-extension",
+  "displayName": "Witch Hat Atelier Grimoire",
+  "description": "Infinite Canvas Architectural Grimoire for React, Vue and TypeScript in VS Code",
+  "version": "1.0.0",
+  "publisher": "wha-atelier",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:wha.openGrimoire",
+    "onView:wha.grimoireView"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "wha.openGrimoire",
+        "title": "WHA: Open Architectural Grimoire Canvas",
+        "icon": "$(telescope)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wha-grimoire-container",
+          "title": "Grimoire",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "wha-grimoire-container": [
+        {
+          "type": "webview",
+          "id": "wha.grimoireView",
+          "name": "Grimoire Canvas"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wha/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.9.3"
+  }
+}

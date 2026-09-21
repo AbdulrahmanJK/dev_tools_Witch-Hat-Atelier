@@ -1,16 +1,7 @@
 #!/usr/bin/env node
 
 import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const cliDistPath = path.resolve(__dirname, '../packages/cli/dist/index.js');
-const { GrimoireServer } = fs.existsSync(cliDistPath)
-  ? await import('../packages/cli/dist/index.js')
-  : await import('../src/server/index.js');
+import { GrimoireServer } from '../dist/index.js';
 
 const args = process.argv.slice(2);
 let targetDir = process.cwd();

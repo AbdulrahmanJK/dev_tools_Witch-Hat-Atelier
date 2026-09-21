@@ -1,2 +1,91 @@
-# WitchHatAtelierSpellCaster
-Draw your own spells and then get the accurate name output so you know what spell you made, also tells you how accurate of a glyph and stuff you make
+# ✧ Grimoire: Witch Hat Atelier Codebase Architectural Viewer ✧
+
+Архитектурный визуализатор кодовых баз в аутентичной стилистике манускриптов манги Камомэ Сирахамы **«Ателье колдовских колпаков» (Witch Hat Atelier / とんがり帽子のアトリエ)**.
+
+---
+
+## ✦ Возможности
+
+- **Каноническая геометрия Сирахамы:**
+  - Печати (Замкнутые круги — *Boundary Rings*), Стрелы направления потоков данных (*Directional Arrows*), Символы операций и функций (*Operant Runes*), Радиальные ключевые замки (*Radial Keystone Crowns*).
+  - Гексагональные печати классов и компонентов.
+  - 3-уровневое концентрическое зонирование (Annular Zoning) без визуальных пересечений и коллизий связей.
+- **Два режима визуализации:**
+  - **Manga Art Mode:** аутентичный монохромный манускрипт тушью на состаренном пергаменте.
+  - **Interactive Mode:** интерактивный интерфейс с живой пульсацией потоков данных (60 FPS fluid delta-time animation), подсветкой родословных связей (Lineage Mandala) и инспектором файлов.
+- **Производительность:**
+  - Чистый Canvas 2D движок с dirty-флагом и умным RAF-лупом.
+  - 0% CPU при простое (Zero CPU Idle).
+  - Вьюпорт-куллинг и 3-уровневый LOD (Level of Detail).
+- **Архитектура Монорепозитория:**
+  - `packages/core`: сканирование AST (Babel), построение графа зависимостей, расчет метрик, алгоритмы упаковки печатей (Apollonian circle packing).
+  - `packages/canvas-engine`: независимый движок рендеринга на Canvas 2D.
+  - `packages/web`: интерфейс на React 19 + Vite + Zustand.
+  - `packages/cli`: CLI-утилита локального запуска с SSE live reload.
+  - `packages/vscode-extension`: интеграция в VS Code через Webview.
+
+---
+
+## ✦ Быстрый старт
+
+### Требования
+- Node.js >= 18
+- pnpm >= 9
+
+### Установка и сборка
+```bash
+# Установка зависимостей
+pnpm install
+
+# Сборка всех пакетов
+pnpm run build
+
+# Запуск тестов
+pnpm test
+```
+
+### Запуск веб-интерфейса разработки
+```bash
+pnpm run dev
+```
+
+---
+
+## ✦ Инструкция: Как открыть любой другой проект через Grimoire Viewer
+
+Вы можете просканировать и визуализировать архитектуру **любого локального проекта** (React, Vue, Node.js, TypeScript/JavaScript):
+
+### Вариант 1. Через CLI-команду
+
+Передайте абсолютный путь к папке нужного проекта в команду:
+
+```bash
+node bin/wha-viewer.js /путь/к/вашему/проекту
+```
+
+Например, для проекта в папке `Documents`:
+```bash
+node bin/wha-viewer.js /Users/abdulrahmanabubakirov/Documents/upline_admin-module
+```
+
+Сервер автоматически:
+1. Просканирует AST всех JS/TS/JSX/Vue файлов в целевой директории.
+2. Построит граф импортов, экспортов и связей компонентов.
+3. Рассчитает радиусы печатей и гармоническую мандалу размещения.
+4. Запустит локальный сервер на `http://localhost:3000` и откроет страницу в браузере.
+5. Подключит файловый наблюдатель (chokidar) с горячей перезагрузкой при изменении кода.
+
+### Вариант 2. Глобальная ссылка через pnpm / npm
+
+Вы можете связать команду локально:
+```bash
+pnpm link --global
+```
+После этого из папки любого проекта достаточно выполнить:
+```bash
+wha-viewer .
+```
+или указать порт:
+```bash
+wha-viewer . --port 4000
+```
