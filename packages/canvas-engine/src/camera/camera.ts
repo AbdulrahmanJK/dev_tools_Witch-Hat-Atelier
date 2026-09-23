@@ -29,6 +29,7 @@ export class Camera {
 
   public onUpdate: (() => void) | null = null;
   public onClick: ((e: PointerEvent, worldPos: { x: number; y: number }) => void) | null = null;
+  public onDoubleClick: ((e: MouseEvent, worldPos: { x: number; y: number }) => void) | null = null;
   public onHover: ((worldPos: { x: number; y: number }) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -210,14 +211,24 @@ export class Camera {
       }
     };
 
+    const onDblClick = (e: MouseEvent) => {
+      if (this.onDoubleClick) {
+        const rect = el.getBoundingClientRect();
+        const worldPos = this.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+        this.onDoubleClick(e, worldPos);
+      }
+    };
+
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('dblclick', onDblClick);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
 
     this.unbindEvents = () => {
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('dblclick', onDblClick);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };

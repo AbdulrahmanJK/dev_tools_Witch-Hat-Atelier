@@ -3,19 +3,24 @@ import { useGrimoireStore } from '../store/useGrimoireStore.js';
 
 interface HeaderProps {
   onFitKingdom: () => void;
+  onFitNodes?: (nodeIds: string[]) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onFitKingdom }) => {
+export const Header: React.FC<HeaderProps> = ({ onFitKingdom, onFitNodes }) => {
   const {
     graph,
     nodes,
     activeFilter,
     unifiedMode,
     realisticMode,
+    devToolsMode,
+    diagnosticFilter,
     searchQuery,
     setFilter,
+    setDiagnosticFilter,
     toggleUnified,
     toggleRealistic,
+    toggleDevTools,
     setSearchQuery,
     selectNode,
   } = useGrimoireStore();
@@ -25,6 +30,8 @@ export const Header: React.FC<HeaderProps> = ({ onFitKingdom }) => {
     totalFiles: 0,
     totalClusters: graph?.clusters?.length || 0,
   };
+
+  const diag = graph?.diagnostics;
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
@@ -67,20 +74,88 @@ export const Header: React.FC<HeaderProps> = ({ onFitKingdom }) => {
           />
         </div>
 
-        {/* Elemental Filter Pills */}
-        <div className="filter-pills" id="element-filters">
-          {elements.map((el) => (
+        {/* Filter Pills: Switch to Diagnostic audit pills in DevTools Mode */}
+        {devToolsMode ? (
+          <div className="filter-pills" id="diagnostic-filters">
             <button
-              key={el}
-              className={`pill-btn ${activeFilter === el ? 'active' : ''}`}
-              onClick={() => setFilter(el)}
+              className={`pill-btn ${diagnosticFilter === 'all' ? 'active' : ''}`}
+              onClick={() => {
+                setDiagnosticFilter('all');
+                onFitKingdom();
+              }}
             >
-              {el === 'all' ? 'All' : el}
+              All ({nodes.length})
             </button>
-          ))}
-        </div>
+            <button
+              className={`pill-btn pill-diag-cycle ${diagnosticFilter === 'cycles' ? 'active' : ''}`}
+              onClick={() => {
+                setDiagnosticFilter('cycles');
+                const cycleIds = diag?.cycles.flatMap((c) => c.nodeIds) || [];
+                if (cycleIds.length > 0 && onFitNodes) {
+                  onFitNodes(cycleIds);
+                }
+              }}
+              title="Filter Circular Dependency Loops (Уроборос)"
+            >
+              🔄 Cycles ({diag?.totalCircularLoops || 0})
+            </button>
+            <button
+              className={`pill-btn pill-diag-orphan ${diagnosticFilter === 'orphans' ? 'active' : ''}`}
+              onClick={() => {
+                setDiagnosticFilter('orphans');
+                const orphanIds = diag?.orphanNodeIds || [];
+                if (orphanIds.length > 0 && onFitNodes) {
+                  onFitNodes(orphanIds);
+                }
+              }}
+              title="Filter Dead Code & Unused Modules (Увядшие руны)"
+            >
+              🍂 Dead Code ({diag?.totalOrphans || 0})
+            </button>
+            <button
+              className={`pill-btn pill-diag-hot ${diagnosticFilter === 'hot' ? 'active' : ''}`}
+              onClick={() => {
+                setDiagnosticFilter('hot');
+                const hotIds = nodes
+                  .filter(
+                    (n) =>
+                      n.metrics?.devTools?.overloadState === 'overcharged' ||
+                      n.metrics?.devTools?.overloadState === 'fissure'
+                  )
+                  .map((n) => n.id);
+                if (hotIds.length > 0 && onFitNodes) {
+                  onFitNodes(hotIds);
+                }
+              }}
+              title="Filter Overheated & Fissure Components"
+            >
+              ⚡ Hot ({diag?.totalOvercharged || 0})
+            </button>
+          </div>
+        ) : (
+          <div className="filter-pills" id="element-filters">
+            {elements.map((el) => (
+              <button
+                key={el}
+                className={`pill-btn ${activeFilter === el ? 'active' : ''}`}
+                onClick={() => setFilter(el)}
+              >
+                {el === 'all' ? 'All' : el}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Mode Toggles */}
+        <button
+          className={`action-btn ${devToolsMode ? 'active devtools-active' : ''}`}
+          id="btn-toggle-devtools"
+          title="Toggle DevTools Mode (WHA Fissure & Re-render Diagnostics)"
+          onClick={toggleDevTools}
+        >
+          <span className="mode-icon">⚡</span> DevTools Mode
+        </button>
+
         <button
           className={`action-btn ${unifiedMode ? 'active' : ''}`}
           id="btn-toggle-unified"

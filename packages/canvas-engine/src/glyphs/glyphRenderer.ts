@@ -176,13 +176,14 @@ export class GlyphRenderer {
 
     // Inner chamber dividing ring
     if (layout.subSeals && layout.subSeals.length > 1) {
+      ctx.save();
       ctx.beginPath();
       ctx.arc(0, 0, chamberR, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(20, 19, 17, 0.45)';
       ctx.lineWidth = 1.2;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
     }
 
     // Radial Keystone Crown
@@ -198,7 +199,6 @@ export class GlyphRenderer {
 
     // Center canonical sigil or sub-seals
     if (layout.subSeals && layout.subSeals.length > 1 && lod >= 2) {
-      this.drawArtConduits(ctx, layout.subSeals, layout.conduits, r);
       layout.subSeals.forEach((sub: SubSeal) => {
         this.drawArtSubSeal(ctx, sub, r, lod);
       });
@@ -280,6 +280,7 @@ export class GlyphRenderer {
 
     // Inner chamber dividing circle
     const chamberR = Math.round(r * 0.64);
+    ctx.save();
     ctx.beginPath();
     ctx.arc(0, 0, chamberR, 0, Math.PI * 2);
     ctx.strokeStyle = theme.stroke;
@@ -287,8 +288,7 @@ export class GlyphRenderer {
     ctx.lineWidth = 1.2;
     ctx.setLineDash([4, 4]);
     ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1.0;
+    ctx.restore();
 
     // Outer annular band: dynamic perimeter signs
     const keystoneR = Math.round(r * 0.81);
@@ -296,7 +296,7 @@ export class GlyphRenderer {
       this.drawDynamicPerimeterSigns(ctx, keystoneR, node.metrics.radialSigns, theme, lod);
     }
 
-    // Draw sub-seals and conduits
+    // Draw sub-seals (internal conduits removed as requested)
     this.drawRealisticSubSeals(ctx, r, layout.subSeals, layout.conduits, theme, lod);
 
     // Golden running dashed aura for selected node
@@ -319,38 +319,13 @@ export class GlyphRenderer {
     ctx: CanvasRenderingContext2D,
     baseR: number,
     subSeals: SubSeal[],
-    conduits: Array<{ from: string; to: string }>,
+    _conduits: Array<{ from: string; to: string }>,
     theme: ThemeColors,
     lod: 0 | 1 | 2
   ): void {
     if (!subSeals || subSeals.length === 0) return;
 
-    // Draw connecting conduits
-    if (conduits && conduits.length > 0 && lod >= 1) {
-      ctx.save();
-      ctx.strokeStyle = theme.stroke;
-      ctx.globalAlpha = 0.35;
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([3, 4]);
-
-      conduits.forEach((c) => {
-        const fromSeal = subSeals.find((s) => s.type === c.from || s.id.endsWith(c.from));
-        const toSeal = subSeals.find((s) => s.type === c.to || s.id.endsWith(c.to));
-        if (fromSeal && toSeal) {
-          const fx = fromSeal.dx || 0;
-          const fy = fromSeal.dy || 0;
-          const tx = toSeal.dx || 0;
-          const ty = toSeal.dy || 0;
-          ctx.beginPath();
-          ctx.moveTo(fx, fy);
-          ctx.lineTo(tx, ty);
-          ctx.stroke();
-        }
-      });
-      ctx.restore();
-    }
-
-    // Draw sub-seals
+    // Draw sub-seals (internal conduit dashed lines omitted for clean aesthetics)
     subSeals.forEach((sub) => {
       const sx = sub.dx || 0;
       const sy = sub.dy || 0;
@@ -697,15 +672,28 @@ export class GlyphRenderer {
     const name = node.name || 'Component';
     const loc = node.loc || node.metrics?.loc || 0;
 
-    // Academic Palatino / Georgia typography
+    // Academic Palatino / Georgia typography with protective parchment halo
     ctx.font = isHighlight ? 'bold 13px Palatino, Georgia, serif' : '12px Palatino, Georgia, serif';
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+    ctx.strokeStyle = '#f7f4e8';
+    ctx.lineWidth = 3.5;
+    ctx.strokeText(name, 0, labelY);
     ctx.fillStyle = '#141311';
     ctx.fillText(name, 0, labelY);
 
     if (lod >= 2 || isHighlight) {
+      let subLabel = `${loc} LOC`;
+      if (node.isCircular) {
+        subLabel = `🔄 Cycle • ${loc}L`;
+      } else if (node.isOrphan) {
+        subLabel = `🍂 0 in • ${loc}L`;
+      }
       ctx.font = '10px Palatino, Georgia, serif';
-      ctx.fillStyle = 'rgba(20, 19, 17, 0.65)';
-      ctx.fillText(`${loc} LOC`, 0, labelY + 15);
+      ctx.lineWidth = 3.0;
+      ctx.strokeText(subLabel, 0, labelY + 15);
+      ctx.fillStyle = node.isCircular ? '#8c1db8' : node.isOrphan ? '#78756d' : 'rgba(20, 19, 17, 0.72)';
+      ctx.fillText(subLabel, 0, labelY + 15);
     }
 
     ctx.restore();
@@ -727,6 +715,11 @@ export class GlyphRenderer {
     const name = node.name || 'Component';
 
     ctx.font = '12px Palatino, Georgia, serif';
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+    ctx.strokeStyle = '#faf8f0';
+    ctx.lineWidth = 3.0;
+    ctx.strokeText(name, 0, labelY);
     ctx.fillStyle = '#141311';
     ctx.fillText(name, 0, labelY);
 

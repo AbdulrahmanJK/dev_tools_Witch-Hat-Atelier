@@ -62,6 +62,10 @@ export const App: React.FC = () => {
     canvasHandleRef.current?.fitKingdom();
   }, []);
 
+  const handleFitNodes = useCallback((nodeIds: string[]) => {
+    canvasHandleRef.current?.fitNodes(nodeIds);
+  }, []);
+
   const handleMountCanvas = useCallback((handle: WhaCanvasHandle) => {
     canvasHandleRef.current = handle;
   }, []);
@@ -72,7 +76,7 @@ export const App: React.FC = () => {
 
   return (
     <div id="app-container">
-      <Header onFitKingdom={handleFitKingdom} />
+      <Header onFitKingdom={handleFitKingdom} onFitNodes={handleFitNodes} />
       <WhaCanvas onMount={handleMountCanvas} />
       <InspectorDrawer transport={transportRef.current} onFocusNode={handleFocusNode} />
       <Tooltip />

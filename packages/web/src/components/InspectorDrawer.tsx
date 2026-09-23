@@ -8,8 +8,15 @@ interface InspectorDrawerProps {
 }
 
 export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onFocusNode }) => {
-  const { nodeMap, selectedNodeId, lineageNodes, isDrawerOpen, selectNode, setDrawerOpen } =
-    useGrimoireStore();
+  const {
+    nodeMap,
+    selectedNodeId,
+    lineageNodes,
+    isDrawerOpen,
+    devToolsMode,
+    selectNode,
+    setDrawerOpen,
+  } = useGrimoireStore();
 
   if (!isDrawerOpen || !selectedNodeId) return null;
 
@@ -38,6 +45,14 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
   const handleCrumbClick = (id: string) => {
     selectNode(id);
     onFocusNode(id);
+  };
+
+  const handleCycleCrumbClick = (name: string) => {
+    const target = Array.from(nodeMap.values()).find((n) => n.name === name);
+    if (target) {
+      selectNode(target.id);
+      onFocusNode(target.id);
+    }
   };
 
   const handleOpenInEditor = (e: React.MouseEvent) => {
@@ -76,6 +91,145 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
       </div>
 
       <div className="scroll-body">
+        {/* DEVTOOLS DIAGNOSTIC OVERLAY */}
+        {devToolsMode && metrics.devTools && (
+          <div className="devtools-panel">
+            <div className="devtools-header">
+              <span className="devtools-badge">⚡ DEVTOOLS DIAGNOSTICS</span>
+              <span className={`health-pill health-${metrics.devTools.overloadState}`}>
+                {metrics.devTools.healthScore}/100 • {metrics.devTools.overloadState.toUpperCase()}
+              </span>
+            </div>
+
+            {/* Performance Grid */}
+            <div className="devtools-grid">
+              <div className="devtools-stat">
+                <span className="stat-label">Health Score</span>
+                <span className={`stat-value score-${metrics.devTools.overloadState}`}>
+                  {metrics.devTools.healthScore}
+                </span>
+              </div>
+              <div className="devtools-stat">
+                <span className="stat-label">Bundle Weight</span>
+                <span className="stat-value">
+                  {metrics.devTools.bundleImpact.rating.toUpperCase()}
+                </span>
+              </div>
+              <div className="devtools-stat">
+                <span className="stat-label">Complexity</span>
+                <span className="stat-value">
+                  {metrics.devTools.complexity.rating.toUpperCase()}
+                </span>
+              </div>
+              <div className="devtools-stat">
+                <span className="stat-label">Re-renders</span>
+                <span className="stat-value">{metrics.devTools.rerenderRisks.length}</span>
+              </div>
+            </div>
+
+            {/* Ouroboros Circular Dependency Loop */}
+            {node.isCircular && node.circularPath && (
+              <div className="devtools-section devtools-cycle-box">
+                <div className="devtools-section-title" style={{ color: '#8c1db8' }}>
+                  🔄 Ouroboros Circular Loop
+                </div>
+                <div className="cycle-path-container">
+                  <div className="cycle-desc">
+                    Breaks HMR live reload, leaks memory, and risks undefined imports on startup:
+                  </div>
+                  <div className="cycle-breadcrumbs">
+                    {node.circularPath.map((name, i) => (
+                      <React.Fragment key={i}>
+                        <span
+                          className={`cycle-crumb-item ${name === node.name ? 'active' : ''}`}
+                          onClick={() => handleCycleCrumbClick(name)}
+                          style={{ cursor: 'pointer' }}
+                          title={`Jump to ${name}`}
+                        >
+                          {name}
+                        </span>
+                        {i < node.circularPath!.length - 1 && <span className="cycle-arrow"> ➔ </span>}
+                      </React.Fragment>
+                    ))}
+                    <span className="cycle-arrow"> ➔ </span>
+                    <span
+                      className="cycle-crumb-item"
+                      onClick={() => handleCycleCrumbClick(node.circularPath![0]!)}
+                      style={{ cursor: 'pointer' }}
+                      title={`Close loop to ${node.circularPath[0]}`}
+                    >
+                      {node.circularPath[0]}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Dead Code & Orphan Module */}
+            {node.isOrphan && (
+              <div className="devtools-section devtools-orphan-box">
+                <div className="devtools-section-title" style={{ color: '#78756d' }}>
+                  🍂 Forgotten Scroll (Dead Code)
+                </div>
+                <div className="orphan-desc">
+                  Zero incoming imports or component renders across the entire kingdom. 
+                  This module ({loc} LOC) appears completely unused and can be safely pruned.
+                </div>
+              </div>
+            )}
+
+            {/* Rerender Risks List */}
+            {metrics.devTools.rerenderRisks.length > 0 && (
+              <div className="devtools-section">
+                <div className="devtools-section-title">🚨 Re-render Vulnerabilities</div>
+                <div className="risk-list">
+                  {metrics.devTools.rerenderRisks.map((risk, idx) => (
+                    <div key={idx} className={`risk-item severity-${risk.severity}`}>
+                      <div className="risk-type">
+                        <span className={`severity-dot dot-${risk.severity}`} />
+                        {risk.type.replace('_', ' ').toUpperCase()}{' '}
+                        {risk.line ? `(line ${risk.line})` : ''}
+                      </div>
+                      <div className="risk-msg">{risk.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Logic & State Complexity */}
+            <div className="devtools-section">
+              <div className="devtools-section-title">🧠 Architecture & State Footprint</div>
+              <div className="devtools-chips">
+                <span className="chip">Cyclomatic: {metrics.devTools.complexity.cyclomatic}</span>
+                <span className="chip">useState: {metrics.devTools.complexity.stateCount}</span>
+                <span className="chip">useEffect: {metrics.devTools.complexity.effectCount}</span>
+                <span className="chip">Callbacks: {metrics.devTools.complexity.callbackCount}</span>
+                <span className="chip">Imports: {metrics.devTools.bundleImpact.importCount}</span>
+              </div>
+              {metrics.devTools.bundleImpact.heavyLibraries.length > 0 && (
+                <div className="heavy-libs-warning">
+                  ⚠️ Heavy bundles: {metrics.devTools.bundleImpact.heavyLibraries.join(', ')}
+                </div>
+              )}
+            </div>
+
+            {/* Master Refactor Tips */}
+            {metrics.devTools.refactorTips.length > 0 && (
+              <div className="devtools-section">
+                <div className="devtools-section-title">💡 Master Refactor Advice</div>
+                <ul className="refactor-tips">
+                  {metrics.devTools.refactorTips.map((tip, idx) => (
+                    <li key={idx} className="tip-item">
+                      ✦ {tip}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Ancestral Lineage */}
         {lineageNodes.length > 0 && (
           <div id="insp-ancestry-section">

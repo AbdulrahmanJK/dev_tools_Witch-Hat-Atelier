@@ -12,6 +12,8 @@ export interface GrimoireState {
   activeFilter: string;
   unifiedMode: boolean;
   realisticMode: boolean;
+  devToolsMode: boolean;
+  diagnosticFilter: 'all' | 'cycles' | 'orphans' | 'hot';
   searchQuery: string;
   isDrawerOpen: boolean;
   zoomPercent: number;
@@ -27,8 +29,10 @@ export interface GrimoireState {
   selectNode: (nodeId: string | null) => void;
   hoverNode: (nodeId: string | null, clientX?: number, clientY?: number) => void;
   setFilter: (filter: string) => void;
+  setDiagnosticFilter: (diagFilter: 'all' | 'cycles' | 'orphans' | 'hot') => void;
   toggleUnified: () => void;
   toggleRealistic: () => void;
+  toggleDevTools: () => void;
   setSearchQuery: (query: string) => void;
   setDrawerOpen: (open: boolean) => void;
   setZoomPercent: (pct: number) => void;
@@ -45,6 +49,8 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
   activeFilter: 'all',
   unifiedMode: false,
   realisticMode: false,
+  devToolsMode: false,
+  diagnosticFilter: 'all',
   searchQuery: '',
   isDrawerOpen: false,
   zoomPercent: 45,
@@ -165,8 +171,16 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
   },
 
   setFilter: (activeFilter) => set({ activeFilter }),
-  toggleUnified: () => set((s) => ({ unifiedMode: !s.unifiedMode })),
-  toggleRealistic: () => set((s) => ({ realisticMode: !s.realisticMode })),
+  setDiagnosticFilter: (diagnosticFilter) => set({ diagnosticFilter }),
+  toggleUnified: () => set((s) => ({ unifiedMode: !s.unifiedMode, devToolsMode: false })),
+  toggleRealistic: () => set((s) => ({ realisticMode: !s.realisticMode, devToolsMode: false })),
+  toggleDevTools: () =>
+    set((s) => ({
+      devToolsMode: !s.devToolsMode,
+      unifiedMode: false,
+      realisticMode: false,
+      diagnosticFilter: 'all',
+    })),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setDrawerOpen: (isDrawerOpen) => set({ isDrawerOpen }),
   setZoomPercent: (zoomPercent) => set({ zoomPercent }),

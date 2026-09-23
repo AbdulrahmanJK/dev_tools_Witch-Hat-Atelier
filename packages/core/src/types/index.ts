@@ -15,6 +15,33 @@ export interface KeystoneDetail {
   detail: string;
 }
 
+export interface RerenderRisk {
+  type: 'inline_callback' | 'unmemoized_calc' | 'missing_memo' | 'excessive_effects' | 'large_state';
+  severity: 'low' | 'medium' | 'high';
+  message: string;
+  line?: number;
+}
+
+export interface DevToolsDiagnostics {
+  healthScore: number; // 0 - 100
+  overloadState: 'harmonious' | 'warm' | 'overcharged' | 'fissure';
+  rerenderRisks: RerenderRisk[];
+  bundleImpact: {
+    loc: number;
+    importCount: number;
+    rating: 'feather' | 'standard' | 'heavy' | 'colossal';
+    heavyLibraries: string[];
+  };
+  complexity: {
+    cyclomatic: number;
+    stateCount: number;
+    effectCount: number;
+    callbackCount: number;
+    rating: 'simple' | 'moderate' | 'complex' | 'labyrinth';
+  };
+  refactorTips: string[];
+}
+
 export interface SealMetrics {
   radius: number;
   element: SealElement;
@@ -29,6 +56,7 @@ export interface SealMetrics {
   loc: number;
   hookCount: number;
   childCount: number;
+  devTools?: DevToolsDiagnostics;
 }
 
 export interface SubSeal {
@@ -84,6 +112,10 @@ export interface SealNode {
   unifiedX?: number;
   unifiedY?: number;
   unifiedR?: number;
+  isCircular?: boolean;
+  circularLoopId?: string;
+  circularPath?: string[];
+  isOrphan?: boolean;
   telemetry?: {
     renderCount: number;
     lastRenderTime: number;
@@ -92,11 +124,29 @@ export interface SealNode {
   };
 }
 
+export interface CircularLoop {
+  id: string;
+  nodeIds: string[];
+  edgeKeys: string[];
+  length: number;
+  names: string[];
+}
+
+export interface DiagnosticsSummary {
+  totalCircularLoops: number;
+  totalOrphans: number;
+  orphanLOC: number;
+  totalOvercharged: number;
+  cycles: CircularLoop[];
+  orphanNodeIds: string[];
+}
+
 export interface RawGraphData {
   nodes: SealNode[];
   edges: SealEdge[];
   clusters: Array<{ name: string; nodeIds: string[]; count: number }>;
   stats: GrimoireGraph['stats'];
+  diagnostics?: DiagnosticsSummary;
 }
 
 export interface SealEdge {
@@ -106,6 +156,7 @@ export interface SealEdge {
   count?: number;
   _key1?: string;
   _key2?: string;
+  isCircular?: boolean;
 }
 
 export interface ArchipelagoCluster {
@@ -144,6 +195,7 @@ export interface GrimoireGraph {
     totalFiles: number;
     locTotal: number;
   };
+  diagnostics?: DiagnosticsSummary;
 }
 
 export interface DevToolsTelemetryEvent {
