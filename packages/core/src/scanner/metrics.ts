@@ -9,6 +9,7 @@ import type {
 import type { CodeInventory, DetectedComponent } from './detector.js';
 
 export interface FileMetricContext {
+  framework?: 'react' | 'vue' | 'none';
   filePath?: string;
   antiPatterns?: Array<{ type: string; message: string }>;
   loc?: number;
@@ -26,81 +27,43 @@ export function calculateDevToolsDiagnostics(
 
   const loc = (component ? component.loc : fileInfo.loc) || 1;
   const isComp = !!component;
-  const hooks = component?.hooksUsed || [];
-  const hookNames = hooks.map((h) => h.name);
   const inlineCallbacks = component?.inlineCallbacks || [];
-  const hasUseMemo = hookNames.includes('useMemo');
-  const hasReactMemo = !!component?.isMemo;
   const antiPatterns = fileInfo.antiPatterns || [];
+  const findings = component?.findings || [];
 
   // 1. Rerender Risk Analysis
-  if (isComp) {
+  if (isComp && fileInfo.framework === 'react') {
     if (inlineCallbacks.length > 0) {
       rerenderRisks.push({
         type: 'inline_callback',
-        severity: inlineCallbacks.length > 2 ? 'high' : 'medium',
-        message: `${inlineCallbacks.length} inline arrow function(s) in JSX props (${inlineCallbacks
+        severity: inlineCallbacks.length > 2 ? 'medium' : 'low',
+        message: `${inlineCallbacks.length} inline callback(s) passed to child components (${inlineCallbacks
           .map((c) => c.propName)
           .filter(Boolean)
           .slice(0, 3)
-          .join(', ')}). Recreated on every render cycle.`,
+          .join(', ')}). Their references change on each parent render; profile the child to determine impact.`,
         line: inlineCallbacks[0]?.line,
       });
       refactorTips.push(
-        `Wrap inline handlers (${inlineCallbacks
+        `Profile children receiving (${inlineCallbacks
           .map((c) => c.propName)
           .filter(Boolean)
           .slice(0, 2)
-          .join(', ')}) in useCallback to stabilize child references.`
+          .join(', ')}) before adding useCallback or changing memoization.`
       );
     }
 
     const inv = component.codeInventory;
     const arrayOpsCount =
       (inv?.maps.length || 0) + (inv?.filters.length || 0) + (inv?.reduces.length || 0);
-    if (arrayOpsCount > 0 && !hasUseMemo) {
+    if (arrayOpsCount > 1) {
       rerenderRisks.push({
         type: 'unmemoized_calc',
-        severity: arrayOpsCount > 2 ? 'high' : 'medium',
-        message: `${arrayOpsCount} unmemoized array transformation(s) (.map/.filter/.reduce) in render path without useMemo.`,
-      });
-      refactorTips.push(
-        `Memoize heavy array calculations using useMemo to avoid re-computation on every tick.`
-      );
-    }
-
-    if (!hasReactMemo && (component.props.length > 3 || component.renderedChildren.length > 4)) {
-      rerenderRisks.push({
-        type: 'missing_memo',
         severity: 'low',
-        message: `Component has ${component.props.length} props & ${component.renderedChildren.length} children but is not memoized with React.memo.`,
+        message: `${arrayOpsCount} array transformations occur in this component's scope. Static analysis cannot tell whether they run during render or are costly.`,
       });
       refactorTips.push(
-        `Wrap component with React.memo() to prevent unnecessary renders when parent state updates.`
-      );
-    }
-
-    const effectCount = component.internalCircuit?.effects?.length || 0;
-    if (effectCount > 2) {
-      rerenderRisks.push({
-        type: 'excessive_effects',
-        severity: effectCount > 4 ? 'high' : 'medium',
-        message: `${effectCount} useEffect/useLayoutEffect blocks. Multiple side-effects risk cascading re-render loops.`,
-      });
-      refactorTips.push(
-        `Consolidate related useEffect hooks and verify dependency arrays to prevent render loops.`
-      );
-    }
-
-    const stateCount = component.internalCircuit?.stateVariables?.length || 0;
-    if (stateCount > 4) {
-      rerenderRisks.push({
-        type: 'large_state',
-        severity: stateCount > 7 ? 'high' : 'medium',
-        message: `${stateCount} separate useState variables. Granular state updates may trigger multiple re-renders.`,
-      });
-      refactorTips.push(
-        `Consider grouping related state into a single useReducer or unified state object.`
+        `Profile array transformations to check whether memoization is useful.`
       );
     }
   }
@@ -108,34 +71,9 @@ export function calculateDevToolsDiagnostics(
   // 2. Bundle Impact
   const imports = fileInfo.imports || [];
   const heavyLibraries: string[] = [];
-  const HEAVY_LIBS = [
-    'lodash',
-    'moment',
-    'xlsx',
-    'chart.js',
-    'three',
-    'echarts',
-    'draft-js',
-    'jspdf',
-    'monaco-editor',
-  ];
-  imports.forEach((imp) => {
-    const s = (imp.source || '').toLowerCase();
-    for (const lib of HEAVY_LIBS) {
-      if (s === lib || s.startsWith(`${lib}/`)) {
-        if (!heavyLibraries.includes(lib)) heavyLibraries.push(lib);
-      }
-    }
-  });
 
   const bundleRating: 'feather' | 'standard' | 'heavy' | 'colossal' =
     loc > 700 ? 'colossal' : loc > 400 ? 'heavy' : loc > 150 ? 'standard' : 'feather';
-
-  if (heavyLibraries.length > 0) {
-    refactorTips.push(
-      `Heavy dependency imported (${heavyLibraries.join(', ')}). Consider dynamic import() or tree-shakeable alternatives.`
-    );
-  }
 
   if (loc > 500) {
     refactorTips.push(
@@ -183,7 +121,12 @@ export function calculateDevToolsDiagnostics(
   if (complexityRating === 'labyrinth') healthScore -= 12;
   else if (complexityRating === 'complex') healthScore -= 6;
 
-  if (heavyLibraries.length > 0) healthScore -= 5 * heavyLibraries.length;
+  for (const finding of findings) {
+    healthScore -= finding.severity === 'high' ? 10 : finding.severity === 'medium' ? 6 : 2;
+    if (finding.framework === 'vue' && finding.rule === 'vue-deep-watch') {
+      refactorTips.push('Limit deep watcher traversal or narrow the watched source when profiling confirms update cost.');
+    }
+  }
 
   healthScore = Math.max(12, Math.min(100, healthScore));
 
@@ -197,7 +140,7 @@ export function calculateDevToolsDiagnostics(
           : 'fissure';
 
   if (refactorTips.length === 0) {
-    refactorTips.push('Pact-compliant inscription: balanced reactive flow and optimal memory footprint.');
+    refactorTips.push('No source finding here. Runtime profiling can reveal update costs that static analysis cannot see.');
   }
 
   return {
@@ -218,6 +161,7 @@ export function calculateDevToolsDiagnostics(
       rating: complexityRating,
     },
     refactorTips,
+    findings,
   };
 }
 
@@ -242,16 +186,16 @@ export function calculateComponentMetrics(
 
   hooks.forEach((h) => {
     const name = h.name;
-    if (['useEffect', 'useLayoutEffect', 'useInterval'].includes(name)) {
+    if (['useEffect', 'useLayoutEffect', 'useInterval', 'watch', 'watchEffect', 'onMounted', 'onUpdated', 'onUnmounted'].includes(name)) {
       keystones.add('Repetition');
       keystoneDetails.push({ name: 'Repetition', hook: name, detail: 'Loop / Lifecycle' });
-    } else if (['useSelector', 'useContext'].includes(name)) {
+    } else if (['useSelector', 'useContext', 'reactive'].includes(name)) {
       keystones.add('Pull');
       keystoneDetails.push({ name: 'Pull', hook: name, detail: h.detail || 'State Ingestion' });
     } else if (name === 'useRef') {
       keystones.add('Column');
       keystoneDetails.push({ name: 'Column', hook: name, detail: 'Direct DOM Beam' });
-    } else if (['useMemo', 'useCallback'].includes(name)) {
+    } else if (['useMemo', 'useCallback', 'computed'].includes(name)) {
       keystones.add('Convergence');
       keystoneDetails.push({ name: 'Convergence', hook: name, detail: 'Focal Synthesis' });
     } else if (
@@ -262,7 +206,7 @@ export function calculateComponentMetrics(
     } else if (name === 'useDispatch') {
       keystones.add('Dispersion');
       keystoneDetails.push({ name: 'Dispersion', hook: name, detail: 'Action Broadcast' });
-    } else if (name === 'useState') {
+    } else if (['useState', 'ref', 'shallowRef'].includes(name)) {
       keystones.add('Diamond');
       keystoneDetails.push({ name: 'Diamond', hook: name, detail: 'Local Boundary State' });
     } else if (name === 'useReducer') {

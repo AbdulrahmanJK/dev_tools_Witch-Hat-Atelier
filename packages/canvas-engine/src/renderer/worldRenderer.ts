@@ -1,5 +1,7 @@
 import type {
   ArchipelagoCluster,
+  DependencySeal,
+  DiagnosticFilter,
   DevToolsTelemetryEvent,
   GrimoireGraph,
   MandalaSector,
@@ -25,6 +27,8 @@ export class WorldRenderer {
   public nodes: SealNode[] = [];
   public edges: SealEdge[] = [];
   public clusters: ArchipelagoCluster[] = [];
+  public dependencies: DependencySeal[] = [];
+  public selectedDependencyId: string | null = null;
   public nodeMap = new Map<string, SealNode>();
   public mandalaSectors: MandalaSector[] = [];
   public rootRadius = 1140;
@@ -38,7 +42,7 @@ export class WorldRenderer {
   public realisticMode = false;
   public devToolsMode = false;
   public activeFilter = 'all';
-  public diagnosticFilter: 'all' | 'cycles' | 'orphans' | 'hot' = 'all';
+  public diagnosticFilter: DiagnosticFilter = 'all';
 
   private sortedUnifiedNodes: SealNode[] = [];
   private pulseOffset = 0;
@@ -57,6 +61,7 @@ export class WorldRenderer {
     this.nodes = data.nodes || [];
     this.edges = data.edges || [];
     this.clusters = data.clusters || [];
+    this.dependencies = data.dependencies || [];
     this.nodeMap = new Map(this.nodes.map((n) => [n.id, n]));
     this.mandalaSectors = data.unifiedLayout?.mandalaSectors || [];
     this.rootRadius = data.unifiedLayout?.rootRadius || 1140;
@@ -105,7 +110,7 @@ export class WorldRenderer {
     realisticMode?: boolean;
     activeFilter?: string;
     devToolsMode?: boolean;
-    diagnosticFilter?: 'all' | 'cycles' | 'orphans' | 'hot';
+    diagnosticFilter?: DiagnosticFilter;
   }): void {
     if (options.unifiedMode !== undefined) this.unifiedMode = options.unifiedMode;
     if (options.realisticMode !== undefined) this.realisticMode = options.realisticMode;
@@ -141,6 +146,10 @@ export class WorldRenderer {
     return null;
   }
 
+  public hitTestDependency(worldX: number, worldY: number): DependencySeal | null {
+    return this.dependencies.find((seal) => Math.hypot(worldX - seal.x, worldY - seal.y) <= seal.radius + 6) || null;
+  }
+
   public render(time = performance.now()): { hasActiveAnimation: boolean } {
     const ctx = this.ctx;
     const cam = this.camera;
@@ -163,6 +172,7 @@ export class WorldRenderer {
     }
 
     // Apply Camera Transform
+    ctx.save();
     ctx.translate(cam.width / 2, cam.height / 2);
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
@@ -178,13 +188,19 @@ export class WorldRenderer {
 
     this.drawEdges(ctx, vp, lod);
     this.drawNodes(ctx, vp, lod);
+    this.drawDependencies(ctx, vp);
 
-    // DevTools telemetry pulses
+    ctx.restore(); // Keep device-pixel scaling, but return to screen coordinates.
+
+    // Screen-space pulses stay legible when the architecture is zoomed far out.
     this.pulseManager.drawPulses(
       ctx,
       (nodeId) => {
         const node = this.nodeMap.get(nodeId);
-        return node ? this.getNodePos(node) : null;
+        if (!node) return null;
+        const pos = this.getNodePos(node);
+        const screen = cam.worldToScreen(pos.x, pos.y);
+        return { x: screen.x, y: screen.y, r: Math.max(13, Math.min(30, pos.r * cam.zoom)) };
       },
       time
     );
@@ -206,7 +222,7 @@ export class WorldRenderer {
         if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) continue;
         const dt = node.metrics?.devTools;
         if (!dt) continue;
-        const state = dt.overloadState;
+        const state = node.telemetry?.isOverheating ? 'overcharged' : dt.overloadState;
         if (state === 'warm' || state === 'overcharged' || state === 'fissure') {
           const pos = this.getNodePos(node);
           const boundR = pos.r * 1.35;
@@ -261,6 +277,59 @@ export class WorldRenderer {
       this.pulseManager.hasActivePulses(time);
 
     return { hasActiveAnimation };
+  }
+
+  private drawDependencies(ctx: CanvasRenderingContext2D, vp: ViewportBounds): void {
+    const active = this.selectedDependencyId;
+    for (const seal of this.dependencies) {
+      if (seal.x + seal.radius < vp.x1 || seal.x - seal.radius > vp.x2 || seal.y + seal.radius < vp.y1 || seal.y - seal.radius > vp.y2) continue;
+      const selected = active === seal.id;
+      ctx.save();
+      if (selected) {
+        ctx.strokeStyle = 'rgba(138, 97, 38, 0.28)';
+        ctx.setLineDash([5, 6]);
+        const groups = new Map<string, { x: number; y: number; count: number }>();
+        for (const id of seal.importerNodeIds) {
+          const node = this.nodeMap.get(id);
+          if (!node) continue;
+          const position = this.getNodePos(node);
+          const key = node.cluster || 'Other';
+          const group = groups.get(key) || { x: 0, y: 0, count: 0 };
+          group.x += position.x; group.y += position.y; group.count++;
+          groups.set(key, group);
+        }
+        for (const group of groups.values()) {
+          const targetX = group.x / group.count;
+          const targetY = group.y / group.count;
+          const middleX = (seal.x + targetX) / 2;
+          const middleY = (seal.y + targetY) / 2;
+          ctx.lineWidth = Math.min(3, 1 + Math.log2(group.count) * 0.45);
+          ctx.beginPath();
+          ctx.moveTo(seal.x, seal.y);
+          ctx.quadraticCurveTo(middleX - (targetY - seal.y) * 0.08, middleY + (targetX - seal.x) * 0.08, targetX, targetY);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+      }
+      ctx.translate(seal.x, seal.y);
+      ctx.fillStyle = '#fbf6e8';
+      const weight = seal.build?.emittedBytesEstimate;
+      ctx.strokeStyle = selected ? '#a05a20' : weight == null ? '#a98d60' : weight >= 100 * 1024 ? '#b54631' : weight >= 20 * 1024 ? '#b78a34' : '#6f865e';
+      ctx.lineWidth = selected ? 3 : 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, seal.radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#c5aa79'; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.arc(0, 0, seal.radius - 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#654527';
+      ctx.font = 'bold 13px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('✦', 0, -5);
+      ctx.font = '10px serif';
+      ctx.fillText(String(seal.importerNodeIds.length), 0, 12);
+      ctx.restore();
+      ctx.save();
+      ctx.fillStyle = '#654527'; ctx.textAlign = 'center'; ctx.font = '12px serif';
+      ctx.fillText(seal.name, seal.x, seal.y + seal.radius + 17);
+      ctx.restore();
+    }
   }
 
   /**
@@ -473,10 +542,16 @@ export class WorldRenderer {
       const isCircularLoop = this.devToolsMode && (edge.isCircular || false);
       const isCyclesFilter = this.devToolsMode && this.diagnosticFilter === 'cycles';
       const isOrphansFilter = this.devToolsMode && this.diagnosticFilter === 'orphans';
+      const isPactFilter = this.devToolsMode && this.diagnosticFilter === 'pact';
 
       ctx.save();
 
-      if (isLineageEdge || isConnectedToActive) {
+      if (this.devToolsMode && edge.isArchitectureViolation) {
+        ctx.strokeStyle = '#b83a14';
+        ctx.lineWidth = isPactFilter ? 3.2 : 2.2;
+        ctx.setLineDash([3, 4]);
+        ctx.globalAlpha = 1;
+      } else if (isLineageEdge || isConnectedToActive) {
         // Active flowing golden / fiery ink thread
         ctx.strokeStyle = isHotConnectedEdge ? '#d43827' : isCircularLoop ? '#a82adb' : '#c48b26';
         ctx.lineWidth = 2.4;
@@ -490,7 +565,7 @@ export class WorldRenderer {
         ctx.setLineDash([6, 3]);
         ctx.lineDashOffset = -(pulseOffset * 1.5);
         ctx.globalAlpha = 1.0;
-      } else if (isCyclesFilter || isOrphansFilter || isDimmed) {
+      } else if (isCyclesFilter || isOrphansFilter || isPactFilter || isDimmed) {
         // Soft whisper threads: don't delete lines, keep them subtle so orphan circles pop out!
         ctx.strokeStyle = 'rgba(20, 19, 17, 0.04)';
         ctx.lineWidth = 0.6;
@@ -567,7 +642,9 @@ export class WorldRenderer {
         else if (this.diagnosticFilter === 'orphans' && !node.isOrphan) isDimmedByDiag = true;
         else if (this.diagnosticFilter === 'hot') {
           const st = node.metrics?.devTools?.overloadState;
-          if (st !== 'overcharged' && st !== 'fissure') isDimmedByDiag = true;
+          if (st !== 'overcharged' && st !== 'fissure' && !node.telemetry?.isOverheating) isDimmedByDiag = true;
+        } else if (this.diagnosticFilter === 'pact' && !node.architectureViolationIds?.length) {
+          isDimmedByDiag = true;
         }
       }
 
@@ -620,6 +697,18 @@ export class WorldRenderer {
         ctx.strokeStyle = this.diagnosticFilter === 'orphans' ? '#c48b26' : '#8a857b';
         ctx.lineWidth = this.diagnosticFilter === 'orphans' ? 2.4 : 1.6;
         ctx.setLineDash([3, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (this.devToolsMode && !isArt && node.architectureViolationIds?.length) {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 10, 0, Math.PI * 2);
+        ctx.strokeStyle = '#b83a14';
+        ctx.lineWidth = this.diagnosticFilter === 'pact' ? 3 : 1.7;
+        ctx.setLineDash([2, 5]);
         ctx.stroke();
         ctx.restore();
       }

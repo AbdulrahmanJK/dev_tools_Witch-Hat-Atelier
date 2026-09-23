@@ -1,7 +1,7 @@
 {
   "name": "wha-codebase-viewer",
   "version": "1.0.0",
-  "description": "Witch Hat Atelier Codebase Viewer - Infinite Canvas Architectural Grimoire for React Projects",
+  "description": "Witch Hat Atelier Codebase Viewer - Infinite Canvas Architectural Grimoire for React and Vue Projects",
   "type": "module",
   "main": "src/server/index.js",
   "bin": {

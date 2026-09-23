@@ -11,6 +11,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
   const {
     nodeMap,
     selectedNodeId,
+    selectedDependencyId,
+    graph,
     lineageNodes,
     isDrawerOpen,
     devToolsMode,
@@ -18,7 +20,39 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
     setDrawerOpen,
   } = useGrimoireStore();
 
-  if (!isDrawerOpen || !selectedNodeId) return null;
+  if (!isDrawerOpen || (!selectedNodeId && !selectedDependencyId)) return null;
+
+  const dependency = graph?.dependencies?.find((item) => item.id === selectedDependencyId);
+  if (dependency) return (
+    <aside id="inspector-drawer" className="open">
+      <div className="scroll-header">
+        <div>
+          <div className="seal-cluster-tag">✦ EXTERNAL LIBRARY</div>
+          <h2 className="seal-title">{dependency.name}</h2>
+          <div className="seal-cluster-tag">{dependency.version || 'Version unknown'}</div>
+        </div>
+        <button className="close-drawer-btn" onClick={() => setDrawerOpen(false)}>✕</button>
+      </div>
+      <div className="scroll-body">
+        <div className="devtools-panel">
+          <div className="devtools-header"><span className="devtools-badge">✦ LIBRARY SEAL</span></div>
+          <p>Source import spread: {dependency.sourceRisk.toUpperCase()} · {dependency.direct ? 'declared dependency' : dependency.importCount ? 'not declared in the nearest package' : 'included transitively in the build'}</p>
+          <p>Imported in {dependency.importerNodeIds.length} code seals; {dependency.importCount} import declarations.</p>
+          {dependency.dynamicImportCount > 0 && <p>{dependency.dynamicImportCount} dynamic imports.</p>}
+          {dependency.build ? <p>Estimated emitted JavaScript: {Math.round((dependency.build.emittedBytesEstimate || 0) / 1024)} KiB across {dependency.build.chunks.length} chunks · {dependency.build.initial ? 'initial load' : 'outside initial entry'}. Rollup module length: {Math.round(dependency.build.renderedBytes / 1024)} KiB.</p> : <p>Bundle bytes have not been measured. Source imports alone cannot determine shipped size.</p>}
+          {dependency.build && <p>Ring colour follows estimated emitted JavaScript: green below 20 KiB, ochre below 100 KiB, red at 100 KiB or more.</p>}
+          {dependency.runtime && <p>Runtime samples: {dependency.runtime.sampleCount}, self time {dependency.runtime.selfTimeMs.toFixed(1)} ms.</p>}
+          <div className="devtools-section-title">Importing seals</div>
+          {dependency.importerNodeIds.map((id) => {
+            const importer = nodeMap.get(id);
+            return <button key={id} className="cycle-crumb-item" onClick={() => { selectNode(id); onFocusNode(id); }}>{importer?.name || id}</button>;
+          })}
+        </div>
+      </div>
+    </aside>
+  );
+
+  if (!selectedNodeId) return null;
 
   const node = nodeMap.get(selectedNodeId);
   if (!node) return null;
@@ -77,6 +111,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
           <h2 className="seal-title" id="insp-title">
             {node.name}
           </h2>
+          {node.framework && node.framework !== 'none' && <div className="seal-cluster-tag">{node.framework.toUpperCase()} {node.frameworkVersion || ''}</div>}
           <div className="seal-cluster-tag" id="insp-cluster">
             ✦ {node.cluster || 'Great Citadel'}
           </div>
@@ -101,7 +136,30 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
               </span>
             </div>
 
+            {metrics.devTools.findings && metrics.devTools.findings.length > 0 && (
+              <div className="devtools-section">
+                <div className="devtools-section-title">Static findings</div>
+                {metrics.devTools.findings.map((finding) => <div key={finding.id} className="cycle-desc">
+                  <strong>{finding.rule}</strong> · {finding.severity} · {finding.confidence} confidence · <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(finding.file, finding.line)}>line {finding.line}</button><br />{finding.message}
+                  {finding.observedCount ? <><br />Runtime observed this prop's identity change {finding.observedCount} times during profiled subtree commits (last duration {finding.lastObservedDurationMs?.toFixed(1)} ms).</> : null}
+                </div>)}
+              </div>
+            )}
+
+            {graph?.diagnostics?.architectureViolations?.filter((violation) => violation.sourceNodeId === node.id).map((violation) => <div key={violation.id} className="devtools-section devtools-cycle-box">
+              <div className="devtools-section-title" style={{ color: '#b83a14' }}>✧ Architecture Pact</div>
+              <div className="cycle-desc">{violation.message}</div>
+              <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(violation.file, violation.line)}>Open line {violation.line}</button>
+            </div>)}
+
             {/* Performance Grid */}
+            {node.telemetry && <div className="devtools-section">
+              <div className="devtools-section-title">Runtime observations</div>
+              <div className="cycle-desc">{node.telemetry.updateCount || 0} measured re-renders · {node.telemetry.mountCount || 0} mounts · {node.telemetry.domUpdateCount || 0} browser DOM observations{(node.telemetry.updateCount || 0) > 0 ? ` · average update ${node.telemetry.avgUpdateDurationMs?.toFixed(1)} ms` : ''}</div>
+              {node.telemetry.isOverheating && <div className="cycle-desc">⚡ Hot: average profiled subtree update exceeds 16 ms after at least five updates.</div>}
+              {node.telemetry.hierarchyPath && node.telemetry.hierarchyPath.length > 1 && <div className="cycle-desc">Runtime path: {node.telemetry.hierarchyPath.join(' → ')}</div>}
+              {node.telemetry.lastReasons && node.telemetry.lastReasons.length > 0 && <div className="cycle-desc">Observed changes: {node.telemetry.lastReasons.join(', ')}. Parent activity is a correlation, not proof of cause.</div>}
+            </div>}
             <div className="devtools-grid">
               <div className="devtools-stat">
                 <span className="stat-label">Health Score</span>
@@ -110,7 +168,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
                 </span>
               </div>
               <div className="devtools-stat">
-                <span className="stat-label">Bundle Weight</span>
+                <span className="stat-label">Source Size</span>
                 <span className="stat-value">
                   {metrics.devTools.bundleImpact.rating.toUpperCase()}
                 </span>

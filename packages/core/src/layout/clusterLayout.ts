@@ -1,4 +1,4 @@
-import type { ArchipelagoCluster, GrimoireGraph, RawGraphData, SealEdge, SealNode } from '../types/index.js';
+import type { ArchipelagoCluster, DependencySeal, GrimoireGraph, RawGraphData, SealEdge, SealNode } from '../types/index.js';
 import { NestedPacker } from './nestedPacker.js';
 import { UnifiedFractalLayout } from './unifiedFractalLayout.js';
 
@@ -108,11 +108,14 @@ export class ClusterLayout {
       }
     });
 
+    const dependencies = this.positionDependencies(graph.dependencies || [], layoutClusters);
+
     return {
       nodes: layoutNodes,
       edges,
       clusters: layoutClusters,
-      bounds: this.calculateOverallBounds(layoutNodes, layoutClusters),
+      dependencies,
+      bounds: this.calculateOverallBounds(layoutNodes, layoutClusters, dependencies),
       stats: graph.stats,
       diagnostics: graph.diagnostics,
       unifiedLayout: {
@@ -120,6 +123,20 @@ export class ClusterLayout {
         mandalaSectors: unifiedResult.mandalaSectors,
       },
     };
+  }
+
+  private positionDependencies(dependencies: DependencySeal[], clusters: ArchipelagoCluster[]): DependencySeal[] {
+    if (!dependencies.length) return [];
+    const outer = Math.max(420, ...clusters.map((cluster) => Math.hypot(cluster.x, cluster.y) + cluster.radius));
+    const circumference = dependencies.reduce((sum, seal) => sum + seal.radius * 2 + 45, 0);
+    const orbit = Math.max(outer + 200, circumference / (2 * Math.PI));
+    let arc = 0;
+    return dependencies.map((seal) => {
+      const segment = seal.radius * 2 + 45;
+      const angle = -Math.PI / 2 + (arc + segment / 2) * 2 * Math.PI / circumference;
+      arc += segment;
+      return { ...seal, x: Math.round(orbit * Math.cos(angle)), y: Math.round(orbit * Math.sin(angle)) };
+    });
   }
 
   /**
@@ -392,7 +409,8 @@ export class ClusterLayout {
 
   private calculateOverallBounds(
     nodes: SealNode[],
-    clusters: ArchipelagoCluster[]
+    clusters: ArchipelagoCluster[],
+    dependencies: DependencySeal[]
   ): { minX: number; minY: number; maxX: number; maxY: number } {
     let minX = Infinity;
     let minY = Infinity;
@@ -412,6 +430,13 @@ export class ClusterLayout {
       if (c.x + c.radius > maxX) maxX = c.x + c.radius;
       if (c.y - c.radius < minY) minY = c.y - c.radius;
       if (c.y + c.radius > maxY) maxY = c.y + c.radius;
+    });
+
+    dependencies.forEach((seal) => {
+      minX = Math.min(minX, seal.x - seal.radius);
+      maxX = Math.max(maxX, seal.x + seal.radius);
+      minY = Math.min(minY, seal.y - seal.radius);
+      maxY = Math.max(maxY, seal.y + seal.radius);
     });
 
     return {

@@ -3,6 +3,8 @@ export * from './scanner/aliasResolver.js';
 export * from './scanner/astParser.js';
 export * from './scanner/detector.js';
 export * from './scanner/vueDetector.js';
+export * from './scanner/frameworkDetector.js';
+export * from './scanner/dependencyScanner.js';
 export * from './scanner/metrics.js';
 export * from './scanner/graphBuilder.js';
 export * from './layout/nestedPacker.js';
