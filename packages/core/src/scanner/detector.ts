@@ -1,4 +1,5 @@
 import _traverse from '@babel/traverse';
+import type { DiagnosticFinding } from '../types/index.js';
 
 const traverse: typeof _traverse = ((_traverse as any).default || _traverse) as any;
 
@@ -40,6 +41,7 @@ export interface DetectedComponent {
   renderedChildren: string[];
   reduxDispatches: string[];
   inlineCallbacks?: Array<{ propName: string; line?: number }>;
+  findings?: DiagnosticFinding[];
   internalCircuit: {
     stateVariables: Array<{ name: string; setter: string; line?: number }>;
     effects: Array<{ line?: number; deps: string[] }>;
@@ -58,6 +60,7 @@ export interface DetectedEntities {
       isNamespace?: boolean;
     }>;
     line?: number;
+    dynamic?: boolean;
   }>;
   components: DetectedComponent[];
   hooksDefined: DetectedHook[];
@@ -120,8 +123,19 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       });
       imports.push({ source, specifiers, line: path.node.loc?.start?.line });
     },
+    ExportAllDeclaration(path: any) {
+      if (path.node.source?.value) imports.push({ source: path.node.source.value, specifiers: [], line: path.node.loc?.start?.line });
+    },
+    CallExpression(path: any) {
+      if (path.node.callee?.type === 'Import' && path.node.arguments[0]?.type === 'StringLiteral') {
+        imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line, dynamic: true });
+      } else if (path.node.callee?.name === 'require' && path.node.arguments[0]?.type === 'StringLiteral') {
+        imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line });
+      }
+    },
 
     ExportNamedDeclaration(path: any) {
+      if (path.node.source?.value) imports.push({ source: path.node.source.value, specifiers: [], line: path.node.loc?.start?.line });
       if (path.node.declaration) {
         if (path.node.declaration.declarations) {
           path.node.declaration.declarations.forEach((d: any) => {
@@ -163,14 +177,14 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       ) {
         antiPatterns.push({
           type: 'DIRECT_DOM_MUTATION',
-          message: `Direct DOM access via document.${prop}() violates React declarative model (Forbidden Magic)`,
+          message: `Direct DOM access via document.${prop}() may bypass the framework's rendered state.`,
           line: path.node.loc?.start?.line,
         });
       }
       if (obj === 'window' && prop === 'location' && path.parent?.type === 'AssignmentExpression') {
         antiPatterns.push({
           type: 'WINDOW_LOCATION_MUTATION',
-          message: 'Direct window.location mutation bypasses React Router flow',
+          message: "Direct window.location mutation bypasses the application's router flow.",
           line: path.node.loc?.start?.line,
         });
       }
@@ -285,6 +299,7 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
     const effectList: Array<{ line?: number; deps: string[] }> = [];
     const internalHandlers: Array<{ name: string; loc: number; line?: number }> = [];
     const inlineCallbacks: Array<{ propName: string; line?: number }> = [];
+    const findings: DiagnosticFinding[] = [];
 
     // Props extraction
     if (fnNode.params && fnNode.params.length > 0) {
@@ -476,16 +491,20 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       JSXAttribute(aPath: any) {
         const propName = aPath.node.name?.name || '';
         const val = aPath.node.value;
+        const parentName = aPath.parentPath?.node?.name;
+        const childName = parentName?.name || parentName?.object?.name;
+        if (!childName || !/^[A-Z]/.test(childName)) return;
         if (val && val.type === 'JSXExpressionContainer') {
           const expr = val.expression;
+          const line = aPath.node.loc?.start?.line || 1;
           if (
             expr &&
             (expr.type === 'ArrowFunctionExpression' || expr.type === 'FunctionExpression')
           ) {
-            inlineCallbacks.push({
-              propName,
-              line: aPath.node.loc?.start?.line,
-            });
+            inlineCallbacks.push({ propName, line });
+            findings.push({ id: `${_filePath}:${line}:react-inline-callback:${propName}`, framework: 'react', rule: 'react-inline-callback', severity: 'low', confidence: 'high', message: `Inline ${propName} callback creates a new reference for <${childName}>. Profile the child before memoizing.`, file: _filePath, line, propName, childName, evidence: 'static' });
+          } else if (expr && (expr.type === 'ObjectExpression' || expr.type === 'ArrayExpression')) {
+            findings.push({ id: `${_filePath}:${line}:react-prop-identity:${propName}`, framework: 'react', rule: 'react-prop-identity', severity: 'low', confidence: 'high', message: `The ${propName} prop creates a fresh ${expr.type === 'ArrayExpression' ? 'array' : 'object'} for <${childName}>.`, file: _filePath, line, propName, childName, evidence: 'static' });
           }
         }
       },
@@ -516,6 +535,7 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       renderedChildren: Array.from(renderedChildren),
       reduxDispatches,
       inlineCallbacks,
+      findings,
       internalCircuit,
       codeInventory,
     };

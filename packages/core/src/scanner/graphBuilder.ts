@@ -1,20 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CircularLoop, DiagnosticsSummary, RawGraphData, SealEdge, SealNode } from '../types/index.js';
+import type { ArchitectureViolation, CircularLoop, DiagnosticsSummary, RawGraphData, SealEdge, SealNode } from '../types/index.js';
 import { AliasResolver } from './aliasResolver.js';
 import { parseFileToAst } from './astParser.js';
 import { detectFileEntities, type DetectedEntities } from './detector.js';
 import { calculateComponentMetrics, calculateNonComponentMetrics } from './metrics.js';
 import { detectVueFileEntities } from './vueDetector.js';
+import { FrameworkDetector } from './frameworkDetector.js';
+import { collectDependencySeals } from './dependencyScanner.js';
 
 export class GraphBuilder {
   private projectRoot: string;
   private resolver: AliasResolver;
   private srcDir: string;
+  private frameworkDetector: FrameworkDetector;
 
   constructor(projectRoot: string) {
     this.projectRoot = path.resolve(projectRoot);
     this.resolver = new AliasResolver(this.projectRoot);
+    this.frameworkDetector = new FrameworkDetector(this.projectRoot);
     this.srcDir = path.join(this.projectRoot, 'src');
     if (!fs.existsSync(this.srcDir)) {
       this.srcDir = this.projectRoot;
@@ -73,7 +77,8 @@ export class GraphBuilder {
       const cluster = this.determineCluster(relPath);
       const nodeIdsForThisFile: string[] = [];
       const ext = path.extname(filePath).toLowerCase();
-      const framework = ext === '.vue' ? 'vue' : entities.hasJsx ? 'react' : 'none';
+      const detection = this.frameworkDetector.detect(filePath, entities);
+      const framework = detection.framework;
 
       if (entities.components && entities.components.length > 0) {
         entities.components.forEach((comp) => {
@@ -84,6 +89,7 @@ export class GraphBuilder {
             loc,
             codeInventory: comp.codeInventory,
             imports: entities.imports,
+            framework,
           });
 
           const node: SealNode = {
@@ -93,6 +99,7 @@ export class GraphBuilder {
             kind: 'component',
             language: ext === '.ts' || ext === '.tsx' ? 'typescript' : 'javascript',
             framework,
+            frameworkVersion: detection.version,
             loc: comp.loc || loc,
             hooks: comp.hooksUsed,
             children: comp.renderedChildren,
@@ -131,7 +138,8 @@ export class GraphBuilder {
           file: relPath,
           kind: category as any,
           language: ext === '.ts' || ext === '.tsx' ? 'typescript' : 'javascript',
-          framework: 'none',
+          framework,
+          frameworkVersion: detection.version,
           hooks: [],
           children: [],
           metrics,
@@ -150,17 +158,44 @@ export class GraphBuilder {
     // 3. Build Edges
     const edges: SealEdge[] = [];
     const edgeSet = new Set<string>();
+    const architectureViolations: ArchitectureViolation[] = [];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const canonicalName = (name: string) => name.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const nodesByName = new Map<string, SealNode[]>();
+    for (const node of nodes) {
+      const key = canonicalName(node.name);
+      nodesByName.set(key, [...(nodesByName.get(key) || []), node]);
+    }
 
     for (const [filePath, data] of fileDataMap.entries()) {
       const sourceNodeIds = fileToNodeIds.get(filePath) || [];
       if (sourceNodeIds.length === 0) continue;
       const primarySourceId = sourceNodeIds[0];
       if (!primarySourceId) continue;
+      const importedChildren = new Map<string, string[]>();
 
       for (const imp of data.entities.imports) {
         const resolvedPath = this.resolver.resolve(imp.source, filePath);
         if (resolvedPath && fileToNodeIds.has(resolvedPath)) {
           const targetNodeIds = fileToNodeIds.get(resolvedPath) || [];
+          const targetCluster = this.determineCluster(path.relative(this.projectRoot, resolvedPath));
+          const pactViolation = this.determineCluster(data.relPath).startsWith('Atelier:') && targetCluster.startsWith('Province:');
+          if (pactViolation && targetNodeIds[0]) {
+            const violation: ArchitectureViolation = {
+              id: `pact:${primarySourceId}:${resolvedPath}:${imp.line || 1}`,
+              rule: 'atelier-imports-province', severity: 'high',
+              sourceNodeId: primarySourceId, targetNodeId: targetNodeIds[0],
+              file: filePath, line: imp.line || 1,
+              message: `Atelier component imports Province page ${path.basename(resolvedPath)}. Move shared code into a neutral module or reverse this dependency.`,
+            };
+            architectureViolations.push(violation);
+            const sourceNode = nodeById.get(primarySourceId);
+            if (sourceNode) (sourceNode.architectureViolationIds ||= []).push(violation.id);
+          }
+          for (const specifier of imp.specifiers) {
+            const name = canonicalName(specifier.local);
+            importedChildren.set(name, targetNodeIds);
+          }
           for (const targetId of targetNodeIds) {
             if (primarySourceId !== targetId) {
               const edgeKey = `${primarySourceId}->${targetId}`;
@@ -170,6 +205,7 @@ export class GraphBuilder {
                   source: primarySourceId,
                   target: targetId,
                   type: 'import',
+                  isArchitectureViolation: pactViolation,
                   _key1: edgeKey,
                   _key2: `${targetId}->${primarySourceId}`,
                 });
@@ -181,10 +217,16 @@ export class GraphBuilder {
 
       // Check rendered children connections
       for (const sourceId of sourceNodeIds) {
-        const sourceNode = nodes.find((n) => n.id === sourceId);
+        const sourceNode = nodeById.get(sourceId);
         if (sourceNode && sourceNode.children) {
           for (const childName of sourceNode.children) {
-            const matchedChildNode = nodes.find((n) => n.name === childName);
+            const canonical = canonicalName(childName.split('.')[0]!);
+            const imported = importedChildren.get(canonical) || [];
+            const importedNodes = imported.map((id) => nodeById.get(id)).filter((node): node is SealNode => Boolean(node));
+            const globalMatches = nodesByName.get(canonical) || [];
+            const matchedChildNode = importedNodes.find((node) => canonicalName(node.name) === canonical)
+              || (importedNodes.length === 1 ? importedNodes[0] : undefined)
+              || (globalMatches.length === 1 ? globalMatches[0] : undefined);
             if (matchedChildNode && matchedChildNode.id !== sourceId) {
               const edgeKey = `${sourceId}->${matchedChildNode.id}`;
               if (!edgeSet.has(edgeKey)) {
@@ -236,12 +278,15 @@ export class GraphBuilder {
       ).length,
       cycles,
       orphanNodeIds: orphanInfo.orphanNodeIds,
+      totalArchitectureViolations: architectureViolations.length,
+      architectureViolations,
     };
 
     return {
       nodes,
       edges,
       clusters,
+      dependencies: collectDependencySeals(this.projectRoot, fileDataMap, fileToNodeIds, this.resolver),
       diagnostics,
       stats: {
         totalFiles: files.length,
@@ -440,7 +485,7 @@ export class GraphBuilder {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!['node_modules', 'build', 'dist', '.git', '.idea', '.dsh'].includes(entry.name)) {
+        if (!['node_modules', 'build', 'dist', '.git', '.idea', '.dsh', '.grimoire'].includes(entry.name)) {
           results.push(...this.collectSourceFiles(fullPath));
         }
       } else if (entry.isFile()) {

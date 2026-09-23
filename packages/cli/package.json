@@ -15,9 +15,7 @@
   },
   "dependencies": {
     "@wha/core": "workspace:*",
-    "chokidar": "^4.0.3"
-  },
-  "devDependencies": {
+    "chokidar": "^4.0.3",
     "typescript": "^5.9.3"
   }
 }

@@ -1,6 +1,7 @@
 export type SealElement = 'Fire' | 'Water' | 'Earth' | 'Wind' | 'Light' | 'Arcane';
 
 export type SealGeometry = 'circle' | 'faceted-strengthen';
+export type DiagnosticFilter = 'all' | 'cycles' | 'orphans' | 'hot' | 'pact';
 
 export interface RadialSign {
   type: string;
@@ -22,6 +23,44 @@ export interface RerenderRisk {
   line?: number;
 }
 
+export interface DiagnosticFinding {
+  id: string;
+  framework: 'react' | 'vue';
+  rule: string;
+  severity: 'low' | 'medium' | 'high';
+  confidence: 'low' | 'medium' | 'high';
+  message: string;
+  file: string;
+  line: number;
+  propName?: string;
+  childName?: string;
+  evidence: 'static' | 'runtime';
+  observedCount?: number;
+  lastObservedDurationMs?: number;
+}
+
+export interface DependencySeal {
+  id: string;
+  name: string;
+  version: string | null;
+  direct: boolean;
+  importerNodeIds: string[];
+  importCount: number;
+  dynamicImportCount: number;
+  sourceRisk: 'unknown' | 'low' | 'medium' | 'high';
+  build?: {
+    renderedBytes: number;
+    emittedBytesEstimate?: number;
+    initial: boolean;
+    chunks: string[];
+    measuredAt: number;
+  };
+  runtime?: { selfTimeMs: number; sampleCount: number };
+  x: number;
+  y: number;
+  radius: number;
+}
+
 export interface DevToolsDiagnostics {
   healthScore: number; // 0 - 100
   overloadState: 'harmonious' | 'warm' | 'overcharged' | 'fissure';
@@ -40,6 +79,7 @@ export interface DevToolsDiagnostics {
     rating: 'simple' | 'moderate' | 'complex' | 'labyrinth';
   };
   refactorTips: string[];
+  findings?: DiagnosticFinding[];
 }
 
 export interface SealMetrics {
@@ -92,6 +132,7 @@ export interface SealNode {
   kind: 'component' | 'module' | 'class' | 'function' | 'hub';
   language?: 'typescript' | 'javascript' | 'python' | 'go' | 'rust' | string;
   framework?: 'react' | 'vue' | 'svelte' | 'none';
+  frameworkVersion?: string;
   cluster?: string;
   loc?: number;
   hooks: Array<{ name: string; detail?: string; line?: number; loc?: number }>;
@@ -116,10 +157,19 @@ export interface SealNode {
   circularLoopId?: string;
   circularPath?: string[];
   isOrphan?: boolean;
+  architectureViolationIds?: string[];
   telemetry?: {
     renderCount: number;
+    updateCount?: number;
+    mountCount?: number;
+    domUpdateCount?: number;
     lastRenderTime: number;
     avgRenderDurationMs: number;
+    avgUpdateDurationMs?: number;
+    source?: 'browser' | 'adapter' | 'fiber';
+    lastReasons?: string[];
+    hierarchyPath?: string[];
+    parentComponentName?: string;
     isOverheating?: boolean;
   };
 }
@@ -139,6 +189,19 @@ export interface DiagnosticsSummary {
   totalOvercharged: number;
   cycles: CircularLoop[];
   orphanNodeIds: string[];
+  totalArchitectureViolations?: number;
+  architectureViolations?: ArchitectureViolation[];
+}
+
+export interface ArchitectureViolation {
+  id: string;
+  rule: 'atelier-imports-province';
+  severity: 'high';
+  sourceNodeId: string;
+  targetNodeId: string;
+  file: string;
+  line: number;
+  message: string;
 }
 
 export interface RawGraphData {
@@ -147,6 +210,7 @@ export interface RawGraphData {
   clusters: Array<{ name: string; nodeIds: string[]; count: number }>;
   stats: GrimoireGraph['stats'];
   diagnostics?: DiagnosticsSummary;
+  dependencies?: DependencySeal[];
 }
 
 export interface SealEdge {
@@ -157,6 +221,7 @@ export interface SealEdge {
   _key1?: string;
   _key2?: string;
   isCircular?: boolean;
+  isArchitectureViolation?: boolean;
 }
 
 export interface ArchipelagoCluster {
@@ -196,12 +261,18 @@ export interface GrimoireGraph {
     locTotal: number;
   };
   diagnostics?: DiagnosticsSummary;
+  dependencies?: DependencySeal[];
 }
 
 export interface DevToolsTelemetryEvent {
-  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER';
+  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER' | 'DOM_UPDATE' | 'LONG_TASK';
+  source?: 'browser' | 'adapter' | 'fiber';
   componentName: string;
+  parentComponentName?: string;
+  hierarchyPath?: string[];
+  commitId?: number;
   nodeId?: string;
+  file?: string;
   timestamp: number;
   durationMs: number;
   changeReasons?: string[];

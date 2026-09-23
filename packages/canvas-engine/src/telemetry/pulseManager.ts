@@ -17,34 +17,40 @@ export class PulseManager {
   public triggerPulse(nodeId: string, event: DevToolsTelemetryEvent): void {
     const now = performance.now();
 
-    // Track frequency for overheating detection (excessive re-renders)
+    // Only profiler events count as renders. Browser DOM observations have different semantics.
     let freq = this.renderCounts.get(nodeId);
-    if (!freq || now - freq.windowStart > 1000) {
-      freq = { count: 1, windowStart: now };
-      this.renderCounts.set(nodeId, freq);
-    } else {
-      freq.count++;
+    if (event.type === 'RENDER') {
+      if (!freq || now - freq.windowStart > 1000) {
+        freq = { count: 1, windowStart: now };
+        this.renderCounts.set(nodeId, freq);
+      } else {
+        freq.count++;
+      }
     }
 
-    const isOverheating = freq.count > 15;
+    const isOverheating = event.type === 'RENDER' && (freq?.count || 0) > 15;
 
     let color = '#e6b122'; // Default golden arcane flash
     if (isOverheating) {
       color = '#e82c2c'; // Overheating danger red!
+    } else if (event.type === 'RENDER' && event.changeReasons?.[0] === 'mount') {
+      color = '#4e8278'; // First mount is distinct from a repeated update.
     } else if (event.type === 'STATE_MUTATION') {
       color = '#e04b16'; // Fire orange
     } else if (event.type === 'EFFECT_TRIGGER') {
       color = '#158ad4'; // Water azure
+    } else if (event.type === 'DOM_UPDATE') {
+      color = '#5f9862'; // Browser-observed DOM activity
     }
 
     this.activePulses.set(nodeId, {
       nodeId,
       startTime: now,
-      duration: 750,
+      duration: 1800,
       type: event.type,
       color,
       durationMs: event.durationMs || 1,
-      renderCount: freq.count,
+      renderCount: event.type === 'RENDER' ? freq?.count || 1 : 0,
     });
   }
 
@@ -76,8 +82,8 @@ export class PulseManager {
       if (!pos) continue;
 
       const baseR = pos.r;
-      const rippleR = baseR + progress * 24;
-      const alpha = (1 - progress) * 0.85;
+      const rippleR = baseR + progress * 38;
+      const alpha = Math.pow(1 - progress, 0.65) * 0.95;
 
       ctx.save();
       ctx.translate(pos.x, pos.y);
@@ -86,15 +92,25 @@ export class PulseManager {
       ctx.beginPath();
       ctx.arc(0, 0, rippleR, 0, Math.PI * 2);
       ctx.strokeStyle = pulse.color;
-      ctx.lineWidth = 3.0 * (1 - progress);
+      ctx.lineWidth = Math.max(1.5, 4.5 * (1 - progress));
       ctx.globalAlpha = alpha;
+      ctx.shadowColor = pulse.color;
+      ctx.shadowBlur = 18;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.beginPath();
+      ctx.arc(0, 0, baseR + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#fff7df';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = alpha * 0.9;
       ctx.stroke();
 
       // Subtle flash glow over seal
       ctx.beginPath();
       ctx.arc(0, 0, baseR, 0, Math.PI * 2);
       ctx.fillStyle = pulse.color;
-      ctx.globalAlpha = alpha * 0.22;
+      ctx.globalAlpha = alpha * 0.38;
       ctx.fill();
 
       // Render count badge if rapid re-rendering

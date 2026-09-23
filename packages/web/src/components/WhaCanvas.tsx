@@ -1,18 +1,22 @@
 import React, { useCallback, useEffect, useRef } from 'react';
+import type { DevToolsTelemetryEvent, SealNode } from '@wha/core';
 import { Camera, WorldRenderer, VFXEngine } from '@wha/canvas-engine';
 import { useGrimoireStore } from '../store/useGrimoireStore.js';
+import { DevtoolsOverview } from './DevtoolsOverview.js';
 
 export interface WhaCanvasHandle {
   focusNode: (nodeId: string) => void;
   fitKingdom: () => void;
   fitNodes: (nodeIds: string[]) => void;
+  showTelemetry: (nodeId: string, event: DevToolsTelemetryEvent, telemetry?: SealNode['telemetry']) => void;
 }
 
 interface WhaCanvasProps {
   onMount?: (handle: WhaCanvasHandle) => void;
+  onMeasureBuild?: () => Promise<{ measured: number }>;
 }
 
-export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
+export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const vfxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<WorldRenderer | null>(null);
@@ -22,6 +26,7 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
 
   const graph = useGrimoireStore((s) => s.graph);
   const selectedNodeId = useGrimoireStore((s) => s.selectedNodeId);
+  const selectedDependencyId = useGrimoireStore((s) => s.selectedDependencyId);
   const lineageNodes = useGrimoireStore((s) => s.lineageNodes);
   const lineageEdges = useGrimoireStore((s) => s.lineageEdges);
   const activeFilter = useGrimoireStore((s) => s.activeFilter);
@@ -95,9 +100,12 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
 
     camera.onClick = (_e, worldPos) => {
       const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
+      const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
       const store = useGrimoireStore.getState();
       if (hit) {
         store.selectNode(hit.id);
+      } else if (dependency) {
+        store.selectDependency(dependency.id);
       } else {
         store.selectNode(null);
       }
@@ -106,7 +114,8 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
 
     camera.onDoubleClick = (_e, worldPos) => {
       const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
-      if (!hit) {
+      const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
+      if (!hit && !dependency) {
         const store = useGrimoireStore.getState();
         // Double click in empty area: reset filters to 'all' without camera zoom
         store.setDiagnosticFilter('all');
@@ -118,14 +127,24 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
 
     camera.onHover = (worldPos) => {
       const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
+      const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
       const store = useGrimoireStore.getState();
       if (hit) {
+        canvas.style.cursor = 'pointer';
         const screenPos = camera.worldToScreen(hit.x, hit.y);
-        store.hoverNode(hit.id, screenPos.x, screenPos.y);
+        const rect = canvas.getBoundingClientRect();
+        store.hoverNode(hit.id, rect.left + screenPos.x, rect.top + screenPos.y);
         renderer.setHoveredNode(hit.id);
+      } else if (dependency) {
+        canvas.style.cursor = 'pointer';
+        const screenPos = camera.worldToScreen(dependency.x, dependency.y);
+        const rect = canvas.getBoundingClientRect();
+        store.hoverDependency(dependency.id, rect.left + screenPos.x, rect.top + screenPos.y);
+        renderer.setHoveredNode(null);
       } else {
         store.hoverNode(null);
         renderer.setHoveredNode(null);
+        canvas.style.cursor = dependency ? 'pointer' : '';
       }
       requestRender();
     };
@@ -165,6 +184,12 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
             camera.fitBounds({ minX, minY, maxX, maxY });
             requestRender();
           }
+        },
+        showTelemetry: (nodeId, event, telemetry) => {
+          const node = renderer.nodeMap.get(nodeId);
+          if (node && telemetry) node.telemetry = telemetry;
+          renderer.triggerDevToolsPulse(nodeId, event);
+          requestRender();
         },
       });
     }
@@ -209,6 +234,12 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
       requestRender();
     }
   }, [selectedNodeId, lineageNodes, lineageEdges, requestRender]);
+
+  useEffect(() => {
+    if (!rendererRef.current) return;
+    rendererRef.current.selectedDependencyId = selectedDependencyId;
+    requestRender();
+  }, [selectedDependencyId, requestRender]);
 
   // Update renderer when modes change
   useEffect(() => {
@@ -258,6 +289,11 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
         ref={canvasRef}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 2 }}
       />
+
+      <DevtoolsOverview onFocusNode={(nodeId) => {
+        const target = rendererRef.current?.nodeMap.get(nodeId);
+        if (target) cameraRef.current?.focusOnNode(target, 0.9);
+      }} onMeasureBuild={onMeasureBuild} />
 
       {/* Canvas HUD */}
       <div className="canvas-hud">
