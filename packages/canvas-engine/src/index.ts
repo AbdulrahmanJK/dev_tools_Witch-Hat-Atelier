@@ -2,4 +2,8 @@ export * from './camera/camera.js';
 export * from './glyphs/whaPaths.js';
 export * from './glyphs/glyphRenderer.js';
 export * from './telemetry/pulseManager.js';
+export * from './telemetry/inkFlameRenderer.js';
 export * from './renderer/worldRenderer.js';
+export * from './vfx/vfxTypes.js';
+export * from './vfx/vfxEngine.js';
+export * from './vfx/passes/sakugaFirePass.js';

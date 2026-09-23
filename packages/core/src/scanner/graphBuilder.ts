@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RawGraphData, SealEdge, SealNode } from '../types/index.js';
+import type { CircularLoop, DiagnosticsSummary, RawGraphData, SealEdge, SealNode } from '../types/index.js';
 import { AliasResolver } from './aliasResolver.js';
 import { parseFileToAst } from './astParser.js';
 import { detectFileEntities, type DetectedEntities } from './detector.js';
@@ -83,6 +83,7 @@ export class GraphBuilder {
             antiPatterns: entities.antiPatterns,
             loc,
             codeInventory: comp.codeInventory,
+            imports: entities.imports,
           });
 
           const node: SealNode = {
@@ -119,7 +120,10 @@ export class GraphBuilder {
         else if (entities.hooksDefined && entities.hooksDefined.length > 0) category = 'hook';
 
         const id = relPath;
-        const metrics = calculateNonComponentMetrics({ loc }, category);
+        const metrics = calculateNonComponentMetrics(
+          { loc, filePath, imports: entities.imports },
+          category
+        );
 
         const node: SealNode = {
           id,
@@ -215,10 +219,30 @@ export class GraphBuilder {
       count: nodeIds.length,
     }));
 
+    // 5. Detect Circular Dependencies (Ouroboros Loops)
+    const cycles = this.detectCircularDependencies(nodes, edges);
+
+    // 6. Detect Dead Code & Orphan Modules
+    const orphanInfo = this.detectDeadCodeAndOrphans(nodes, edges);
+
+    const diagnostics: DiagnosticsSummary = {
+      totalCircularLoops: cycles.length,
+      totalOrphans: orphanInfo.orphanNodeIds.length,
+      orphanLOC: orphanInfo.orphanLOC,
+      totalOvercharged: nodes.filter(
+        (n) =>
+          n.metrics.devTools?.overloadState === 'overcharged' ||
+          n.metrics.devTools?.overloadState === 'fissure'
+      ).length,
+      cycles,
+      orphanNodeIds: orphanInfo.orphanNodeIds,
+    };
+
     return {
       nodes,
       edges,
       clusters,
+      diagnostics,
       stats: {
         totalFiles: files.length,
         totalNodes: nodes.length,
@@ -227,6 +251,133 @@ export class GraphBuilder {
         locTotal,
       },
     };
+  }
+
+  /**
+   * Detect elementary circular dependency cycles via DFS path backtracking
+   */
+  public detectCircularDependencies(nodes: SealNode[], edges: SealEdge[]): CircularLoop[] {
+    const adj = new Map<string, string[]>();
+    nodes.forEach((n) => adj.set(n.id, []));
+    edges.forEach((e) => {
+      if (adj.has(e.source) && adj.has(e.target) && e.source !== e.target) {
+        adj.get(e.source)!.push(e.target);
+      }
+    });
+
+    const cycles: CircularLoop[] = [];
+    const visited = new Set<string>();
+    const onStack = new Set<string>();
+    const pathStack: string[] = [];
+    const seenSignatures = new Set<string>();
+    const nodeNameMap = new Map(nodes.map((n) => [n.id, n.name]));
+
+    const dfs = (u: string) => {
+      visited.add(u);
+      onStack.add(u);
+      pathStack.push(u);
+
+      const neighbors = adj.get(u) || [];
+      for (const v of neighbors) {
+        if (onStack.has(v)) {
+          const idx = pathStack.indexOf(v);
+          if (idx !== -1) {
+            const cNodes = pathStack.slice(idx);
+            if (cNodes.length >= 2) {
+              const minItem = cNodes.reduce((min, cur) => (cur < min ? cur : min), cNodes[0]!);
+              const minIdx = cNodes.indexOf(minItem);
+              const normalized = [...cNodes.slice(minIdx), ...cNodes.slice(0, minIdx)];
+              const sig = normalized.join('->');
+
+              if (!seenSignatures.has(sig)) {
+                seenSignatures.add(sig);
+                const edgeKeys: string[] = [];
+                for (let i = 0; i < cNodes.length; i++) {
+                  const from = cNodes[i]!;
+                  const to = cNodes[(i + 1) % cNodes.length]!;
+                  edgeKeys.push(`${from}->${to}`);
+                }
+
+                cycles.push({
+                  id: `cycle-${cycles.length + 1}`,
+                  nodeIds: cNodes,
+                  names: cNodes.map((id) => nodeNameMap.get(id) || id),
+                  edgeKeys,
+                  length: cNodes.length,
+                });
+              }
+            }
+          }
+        } else if (!visited.has(v)) {
+          dfs(v);
+        }
+      }
+
+      pathStack.pop();
+      onStack.delete(u);
+    };
+
+    nodes.forEach((n) => {
+      if (!visited.has(n.id)) {
+        dfs(n.id);
+      }
+    });
+
+    // Tag nodes participating in circular loops
+    for (const cycle of cycles) {
+      for (const nodeId of cycle.nodeIds) {
+        const node = nodes.find((n) => n.id === nodeId);
+        if (node) {
+          node.isCircular = true;
+          node.circularLoopId = cycle.id;
+          node.circularPath = cycle.names;
+        }
+      }
+    }
+
+    // Tag edges participating in circular loops
+    const cycleEdgeKeys = new Set(cycles.flatMap((c) => c.edgeKeys));
+    edges.forEach((e) => {
+      if (cycleEdgeKeys.has(e._key1 || '') || cycleEdgeKeys.has(`${e.source}->${e.target}`)) {
+        e.isCircular = true;
+      }
+    });
+
+    return cycles;
+  }
+
+  /**
+   * Knip-style orphan & dead code detection: modules with 0 incoming dependencies
+   */
+  public detectDeadCodeAndOrphans(
+    nodes: SealNode[],
+    edges: SealEdge[]
+  ): { orphanNodeIds: string[]; orphanLOC: number } {
+    const incomingCount = new Map<string, number>();
+    nodes.forEach((n) => incomingCount.set(n.id, 0));
+    edges.forEach((e) => {
+      incomingCount.set(e.target, (incomingCount.get(e.target) || 0) + 1);
+    });
+
+    const orphanNodeIds: string[] = [];
+    let orphanLOC = 0;
+
+    nodes.forEach((n) => {
+      const lowerName = n.name.toLowerCase();
+      const isEntryPoint =
+        n.cluster?.includes('Core') ||
+        ['app', 'index', 'main', 'routes', 'router'].includes(lowerName) ||
+        n.file.toLowerCase().includes('routes');
+
+      const inCount = incomingCount.get(n.id) || 0;
+      if (!isEntryPoint && inCount === 0) {
+        n.isOrphan = true;
+        orphanNodeIds.push(n.id);
+        orphanLOC += n.loc || n.metrics.loc || 0;
+      }
+    });
+
+    return { orphanNodeIds, orphanLOC };
   }
 
   public determineCluster(relPath: string): string {

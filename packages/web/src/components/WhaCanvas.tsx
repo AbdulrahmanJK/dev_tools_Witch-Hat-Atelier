@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { Camera, WorldRenderer } from '@wha/canvas-engine';
+import { Camera, WorldRenderer, VFXEngine } from '@wha/canvas-engine';
 import { useGrimoireStore } from '../store/useGrimoireStore.js';
 
 export interface WhaCanvasHandle {
   focusNode: (nodeId: string) => void;
   fitKingdom: () => void;
+  fitNodes: (nodeIds: string[]) => void;
 }
 
 interface WhaCanvasProps {
@@ -13,7 +14,9 @@ interface WhaCanvasProps {
 
 export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const vfxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<WorldRenderer | null>(null);
+  const vfxEngineRef = useRef<VFXEngine | null>(null);
   const cameraRef = useRef<Camera | null>(null);
   const renderScheduledRef = useRef(false);
 
@@ -24,6 +27,8 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
   const activeFilter = useGrimoireStore((s) => s.activeFilter);
   const unifiedMode = useGrimoireStore((s) => s.unifiedMode);
   const realisticMode = useGrimoireStore((s) => s.realisticMode);
+  const devToolsMode = useGrimoireStore((s) => s.devToolsMode);
+  const diagnosticFilter = useGrimoireStore((s) => s.diagnosticFilter);
   const zoomPercent = useGrimoireStore((s) => s.zoomPercent);
 
   const requestRender = useCallback(() => {
@@ -50,13 +55,21 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const vfxCanvas = vfxCanvasRef.current;
+    if (!canvas || !vfxCanvas) return;
 
     const camera = new Camera(canvas);
     const renderer = new WorldRenderer(canvas, camera);
+    const vfxEngine = new VFXEngine(vfxCanvas);
+
+    renderer.setVFXEngine(vfxEngine);
 
     cameraRef.current = camera;
     rendererRef.current = renderer;
+    vfxEngineRef.current = vfxEngine;
+
+    (window as any).__GRIMOIRE_RENDERER__ = renderer;
+    (window as any).__GRIMOIRE_VFX__ = vfxEngine;
 
     const handleResize = () => {
       const parent = canvas.parentElement;
@@ -65,11 +78,12 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
       const h = parent.clientHeight;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
 
+      vfxEngine.resize(w, h, dpr);
       camera.resize(w, h);
       requestRender();
     };
@@ -88,6 +102,18 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
         store.selectNode(null);
       }
       requestRender();
+    };
+
+    camera.onDoubleClick = (_e, worldPos) => {
+      const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
+      if (!hit) {
+        const store = useGrimoireStore.getState();
+        // Double click in empty area: reset filters to 'all' without camera zoom
+        store.setDiagnosticFilter('all');
+        store.setFilter('all');
+        store.selectNode(null);
+        requestRender();
+      }
     };
 
     camera.onHover = (worldPos) => {
@@ -118,12 +144,35 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
             camera.fitBounds(currentGraph.bounds);
           }
         },
+        fitNodes: (nodeIds: string[]) => {
+          if (nodeIds.length === 0) return;
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          nodeIds.forEach((id) => {
+            const n = renderer.nodeMap.get(id);
+            if (n) {
+              const pos = renderer.getNodePos(n);
+              const r = pos.r + 75;
+              if (pos.x - r < minX) minX = pos.x - r;
+              if (pos.x + r > maxX) maxX = pos.x + r;
+              if (pos.y - r < minY) minY = pos.y - r;
+              if (pos.y + r > maxY) maxY = pos.y + r;
+            }
+          });
+          if (minX !== Infinity) {
+            camera.fitBounds({ minX, minY, maxX, maxY });
+            requestRender();
+          }
+        },
       });
     }
 
     return () => {
       window.removeEventListener('resize', handleResize);
       camera.destroy();
+      vfxEngine.destroy();
     };
   }, [onMount, requestRender]);
 
@@ -164,10 +213,16 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
   // Update renderer when modes change
   useEffect(() => {
     if (rendererRef.current) {
-      rendererRef.current.setModes({ unifiedMode, realisticMode, activeFilter });
+      rendererRef.current.setModes({
+        unifiedMode,
+        realisticMode,
+        activeFilter,
+        devToolsMode,
+        diagnosticFilter,
+      });
       requestRender();
     }
-  }, [unifiedMode, realisticMode, activeFilter, requestRender]);
+  }, [unifiedMode, realisticMode, activeFilter, devToolsMode, diagnosticFilter, requestRender]);
 
   const handleZoomIn = () => {
     if (cameraRef.current) {
@@ -182,8 +237,27 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount }) => {
   };
 
   return (
-    <main id="viewport-container" style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <canvas id="grimoire-canvas" ref={canvasRef} />
+    <main
+      id="viewport-container"
+      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}
+    >
+      <canvas
+        id="grimoire-vfx-canvas"
+        ref={vfxCanvasRef}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      />
+      <canvas
+        id="grimoire-canvas"
+        ref={canvasRef}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 2 }}
+      />
 
       {/* Canvas HUD */}
       <div className="canvas-hud">

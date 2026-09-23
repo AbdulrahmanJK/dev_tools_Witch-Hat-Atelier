@@ -70,7 +70,7 @@ export class GrimoireServer {
     });
   }
 
-  public refreshGraph(): void {
+  public refreshGraph(): GrimoireGraph {
     console.time('✦ Scanned in');
     const rawGraph = this.builder.buildGraph();
     this.cachedGraph = this.layout.computeLayout(rawGraph);
@@ -78,6 +78,7 @@ export class GrimoireServer {
     console.log(
       `✦ Inscribed ${this.cachedGraph.nodes.length} Glyphs across ${this.cachedGraph.clusters.length} Archipelagos (${this.cachedGraph.edges.length} ink threads).`
     );
+    return this.cachedGraph;
   }
 
   private setupWatcher(): void {

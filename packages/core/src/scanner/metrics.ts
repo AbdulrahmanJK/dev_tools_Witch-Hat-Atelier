@@ -1,4 +1,11 @@
-import type { KeystoneDetail, RadialSign, SealElement, SealMetrics } from '../types/index.js';
+import type {
+  DevToolsDiagnostics,
+  KeystoneDetail,
+  RadialSign,
+  RerenderRisk,
+  SealElement,
+  SealMetrics,
+} from '../types/index.js';
 import type { CodeInventory, DetectedComponent } from './detector.js';
 
 export interface FileMetricContext {
@@ -6,6 +13,212 @@ export interface FileMetricContext {
   antiPatterns?: Array<{ type: string; message: string }>;
   loc?: number;
   codeInventory?: CodeInventory;
+  imports?: Array<{ source: string }>;
+}
+
+export function calculateDevToolsDiagnostics(
+  component: DetectedComponent | null,
+  fileInfo: FileMetricContext,
+  _category?: string
+): DevToolsDiagnostics {
+  const rerenderRisks: RerenderRisk[] = [];
+  const refactorTips: string[] = [];
+
+  const loc = (component ? component.loc : fileInfo.loc) || 1;
+  const isComp = !!component;
+  const hooks = component?.hooksUsed || [];
+  const hookNames = hooks.map((h) => h.name);
+  const inlineCallbacks = component?.inlineCallbacks || [];
+  const hasUseMemo = hookNames.includes('useMemo');
+  const hasReactMemo = !!component?.isMemo;
+  const antiPatterns = fileInfo.antiPatterns || [];
+
+  // 1. Rerender Risk Analysis
+  if (isComp) {
+    if (inlineCallbacks.length > 0) {
+      rerenderRisks.push({
+        type: 'inline_callback',
+        severity: inlineCallbacks.length > 2 ? 'high' : 'medium',
+        message: `${inlineCallbacks.length} inline arrow function(s) in JSX props (${inlineCallbacks
+          .map((c) => c.propName)
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(', ')}). Recreated on every render cycle.`,
+        line: inlineCallbacks[0]?.line,
+      });
+      refactorTips.push(
+        `Wrap inline handlers (${inlineCallbacks
+          .map((c) => c.propName)
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(', ')}) in useCallback to stabilize child references.`
+      );
+    }
+
+    const inv = component.codeInventory;
+    const arrayOpsCount =
+      (inv?.maps.length || 0) + (inv?.filters.length || 0) + (inv?.reduces.length || 0);
+    if (arrayOpsCount > 0 && !hasUseMemo) {
+      rerenderRisks.push({
+        type: 'unmemoized_calc',
+        severity: arrayOpsCount > 2 ? 'high' : 'medium',
+        message: `${arrayOpsCount} unmemoized array transformation(s) (.map/.filter/.reduce) in render path without useMemo.`,
+      });
+      refactorTips.push(
+        `Memoize heavy array calculations using useMemo to avoid re-computation on every tick.`
+      );
+    }
+
+    if (!hasReactMemo && (component.props.length > 3 || component.renderedChildren.length > 4)) {
+      rerenderRisks.push({
+        type: 'missing_memo',
+        severity: 'low',
+        message: `Component has ${component.props.length} props & ${component.renderedChildren.length} children but is not memoized with React.memo.`,
+      });
+      refactorTips.push(
+        `Wrap component with React.memo() to prevent unnecessary renders when parent state updates.`
+      );
+    }
+
+    const effectCount = component.internalCircuit?.effects?.length || 0;
+    if (effectCount > 2) {
+      rerenderRisks.push({
+        type: 'excessive_effects',
+        severity: effectCount > 4 ? 'high' : 'medium',
+        message: `${effectCount} useEffect/useLayoutEffect blocks. Multiple side-effects risk cascading re-render loops.`,
+      });
+      refactorTips.push(
+        `Consolidate related useEffect hooks and verify dependency arrays to prevent render loops.`
+      );
+    }
+
+    const stateCount = component.internalCircuit?.stateVariables?.length || 0;
+    if (stateCount > 4) {
+      rerenderRisks.push({
+        type: 'large_state',
+        severity: stateCount > 7 ? 'high' : 'medium',
+        message: `${stateCount} separate useState variables. Granular state updates may trigger multiple re-renders.`,
+      });
+      refactorTips.push(
+        `Consider grouping related state into a single useReducer or unified state object.`
+      );
+    }
+  }
+
+  // 2. Bundle Impact
+  const imports = fileInfo.imports || [];
+  const heavyLibraries: string[] = [];
+  const HEAVY_LIBS = [
+    'lodash',
+    'moment',
+    'xlsx',
+    'chart.js',
+    'three',
+    'echarts',
+    'draft-js',
+    'jspdf',
+    'monaco-editor',
+  ];
+  imports.forEach((imp) => {
+    const s = (imp.source || '').toLowerCase();
+    for (const lib of HEAVY_LIBS) {
+      if (s === lib || s.startsWith(`${lib}/`)) {
+        if (!heavyLibraries.includes(lib)) heavyLibraries.push(lib);
+      }
+    }
+  });
+
+  const bundleRating: 'feather' | 'standard' | 'heavy' | 'colossal' =
+    loc > 700 ? 'colossal' : loc > 400 ? 'heavy' : loc > 150 ? 'standard' : 'feather';
+
+  if (heavyLibraries.length > 0) {
+    refactorTips.push(
+      `Heavy dependency imported (${heavyLibraries.join(', ')}). Consider dynamic import() or tree-shakeable alternatives.`
+    );
+  }
+
+  if (loc > 500) {
+    refactorTips.push(
+      `Monolithic file (${loc} LOC). High architectural entropy; decompose into smaller focused sub-seals.`
+    );
+  }
+
+  // 3. Complexity
+  const inv = component?.codeInventory;
+  const loopCount = (inv?.loops.length || 0) + (inv?.forEaches.length || 0);
+  const stateCount = component?.internalCircuit?.stateVariables?.length || 0;
+  const effectCount = component?.internalCircuit?.effects?.length || 0;
+  const handlerCount =
+    (component?.internalCircuit?.handlers?.length || 0) + inlineCallbacks.length;
+  const cyclomatic =
+    1 +
+    loopCount * 2 +
+    (inv?.maps.length || 0) +
+    (inv?.filters.length || 0) +
+    effectCount +
+    Math.floor(loc / 40);
+
+  const complexityRating: 'simple' | 'moderate' | 'complex' | 'labyrinth' =
+    cyclomatic > 22
+      ? 'labyrinth'
+      : cyclomatic > 12
+        ? 'complex'
+        : cyclomatic > 5
+          ? 'moderate'
+          : 'simple';
+
+  // 4. Health Score Calculation
+  let healthScore = 100;
+  rerenderRisks.forEach((r) => {
+    if (r.severity === 'high') healthScore -= 14;
+    else if (r.severity === 'medium') healthScore -= 8;
+    else healthScore -= 4;
+  });
+
+  if (loc > 800) healthScore -= 20;
+  else if (loc > 500) healthScore -= 12;
+  else if (loc > 300) healthScore -= 6;
+
+  if (antiPatterns.length > 0) healthScore -= 15;
+  if (complexityRating === 'labyrinth') healthScore -= 12;
+  else if (complexityRating === 'complex') healthScore -= 6;
+
+  if (heavyLibraries.length > 0) healthScore -= 5 * heavyLibraries.length;
+
+  healthScore = Math.max(12, Math.min(100, healthScore));
+
+  const overloadState: 'harmonious' | 'warm' | 'overcharged' | 'fissure' =
+    healthScore >= 82
+      ? 'harmonious'
+      : healthScore >= 62
+        ? 'warm'
+        : healthScore >= 42
+          ? 'overcharged'
+          : 'fissure';
+
+  if (refactorTips.length === 0) {
+    refactorTips.push('Pact-compliant inscription: balanced reactive flow and optimal memory footprint.');
+  }
+
+  return {
+    healthScore,
+    overloadState,
+    rerenderRisks,
+    bundleImpact: {
+      loc,
+      importCount: imports.length,
+      rating: bundleRating,
+      heavyLibraries,
+    },
+    complexity: {
+      cyclomatic,
+      stateCount,
+      effectCount,
+      callbackCount: handlerCount,
+      rating: complexityRating,
+    },
+    refactorTips,
+  };
 }
 
 export function calculateComponentMetrics(
@@ -287,6 +500,8 @@ export function calculateComponentMetrics(
     stabilityNote = 'Exquisite economy of form; minimal ink dissipation.';
   }
 
+  const devTools = calculateDevToolsDiagnostics(component, fileInfo);
+
   return {
     radius,
     element: dominantElement,
@@ -301,11 +516,12 @@ export function calculateComponentMetrics(
     loc,
     hookCount,
     childCount,
+    devTools,
   };
 }
 
 export function calculateNonComponentMetrics(
-  fileInfo: { loc?: number },
+  fileInfo: { loc?: number; filePath?: string; imports?: Array<{ source: string }> },
   category: string
 ): SealMetrics {
   const loc = fileInfo.loc || 1;
@@ -317,6 +533,8 @@ export function calculateNonComponentMetrics(
   if (category === 'redux') element = 'Water';
   if (category === 'hook') element = 'Wind';
   if (category === 'constants') element = 'Earth';
+
+  const devTools = calculateDevToolsDiagnostics(null, fileInfo, category);
 
   return {
     radius,
@@ -332,5 +550,6 @@ export function calculateNonComponentMetrics(
     loc,
     hookCount: 0,
     childCount: 0,
+    devTools,
   };
 }

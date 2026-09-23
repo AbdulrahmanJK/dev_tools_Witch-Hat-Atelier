@@ -9,6 +9,9 @@ import type {
 import type { Camera, ViewportBounds } from '../camera/camera.js';
 import { GlyphRenderer } from '../glyphs/glyphRenderer.js';
 import { PulseManager } from '../telemetry/pulseManager.js';
+import { InkFlameRenderer } from '../telemetry/inkFlameRenderer.js';
+import type { VFXEngine } from '../vfx/vfxEngine.js';
+import type { VFXItem } from '../vfx/vfxTypes.js';
 
 export class WorldRenderer {
   public canvas: HTMLCanvasElement;
@@ -16,6 +19,8 @@ export class WorldRenderer {
   public camera: Camera;
   public glyphRenderer: GlyphRenderer;
   public pulseManager: PulseManager;
+  public inkFlameRenderer: InkFlameRenderer;
+  public vfxEngine: VFXEngine | null = null;
 
   public nodes: SealNode[] = [];
   public edges: SealEdge[] = [];
@@ -31,7 +36,9 @@ export class WorldRenderer {
 
   public unifiedMode = false;
   public realisticMode = false;
+  public devToolsMode = false;
   public activeFilter = 'all';
+  public diagnosticFilter: 'all' | 'cycles' | 'orphans' | 'hot' = 'all';
 
   private sortedUnifiedNodes: SealNode[] = [];
   private pulseOffset = 0;
@@ -39,10 +46,11 @@ export class WorldRenderer {
 
   constructor(canvas: HTMLCanvasElement, camera: Camera) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false })!;
+    this.ctx = canvas.getContext('2d')!;
     this.camera = camera;
     this.glyphRenderer = new GlyphRenderer();
     this.pulseManager = new PulseManager();
+    this.inkFlameRenderer = new InkFlameRenderer();
   }
 
   public setData(data: GrimoireGraph): void {
@@ -96,10 +104,18 @@ export class WorldRenderer {
     unifiedMode?: boolean;
     realisticMode?: boolean;
     activeFilter?: string;
+    devToolsMode?: boolean;
+    diagnosticFilter?: 'all' | 'cycles' | 'orphans' | 'hot';
   }): void {
     if (options.unifiedMode !== undefined) this.unifiedMode = options.unifiedMode;
     if (options.realisticMode !== undefined) this.realisticMode = options.realisticMode;
     if (options.activeFilter !== undefined) this.activeFilter = options.activeFilter;
+    if (options.devToolsMode !== undefined) this.devToolsMode = options.devToolsMode;
+    if (options.diagnosticFilter !== undefined) this.diagnosticFilter = options.diagnosticFilter;
+  }
+
+  public setVFXEngine(vfx: VFXEngine | null): void {
+    this.vfxEngine = vfx;
   }
 
   public triggerDevToolsPulse(nodeId: string, event: DevToolsTelemetryEvent): void {
@@ -138,9 +154,13 @@ export class WorldRenderer {
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    // Parchment background
-    ctx.fillStyle = this.realisticMode ? '#faf8f0' : '#f7f4e8';
-    ctx.fillRect(0, 0, cam.width, cam.height);
+    // Clear 2D canvas so underlying WebGL VFX flames show through,
+    // while solid node seal paper and all text labels stay 100% on top!
+    ctx.clearRect(0, 0, cam.width, cam.height);
+    if (this.realisticMode) {
+      ctx.fillStyle = '#faf8f0';
+      ctx.fillRect(0, 0, cam.width, cam.height);
+    }
 
     // Apply Camera Transform
     ctx.translate(cam.width / 2, cam.height / 2);
@@ -171,29 +191,96 @@ export class WorldRenderer {
 
     ctx.restore();
 
+    // 2. Dispatch GPU WebGL VFX items
+    const vfxItems: VFXItem[] = [];
+    const allowFlame =
+      this.devToolsMode &&
+      !this.realisticMode &&
+      (this.diagnosticFilter === 'all' || this.diagnosticFilter === 'hot');
+
+    if (allowFlame) {
+      const activeNodeId = this.selectedNodeId || this.hoveredNodeId;
+      const list = this.unifiedMode ? this.sortedUnifiedNodes : this.nodes;
+
+      for (const node of list) {
+        if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) continue;
+        const dt = node.metrics?.devTools;
+        if (!dt) continue;
+        const state = dt.overloadState;
+        if (state === 'warm' || state === 'overcharged' || state === 'fissure') {
+          const pos = this.getNodePos(node);
+          const boundR = pos.r * 1.35;
+          // Viewport culling
+          if (
+            pos.x + boundR < vp.x1 ||
+            pos.x - boundR > vp.x2 ||
+            pos.y + boundR < vp.y1 ||
+            pos.y - boundR > vp.y2
+          ) {
+            continue;
+          }
+
+          const isDimmed =
+            !!activeNodeId &&
+            node.id !== activeNodeId &&
+            !this.lineageNodeIds.has(node.id) &&
+            this.diagnosticFilter !== 'hot';
+
+          // Option V: For dimmed nodes, use state = 3 (subtle smoldering runic embers along the rim)
+          // For active / focused node or when in 'hot' filter, use state 1 (warm) or state 2 (overcharged/fissure)
+          let vfxState: 1 | 2 | 3 = state === 'warm' ? 1 : 2;
+          let intensity = state === 'fissure' ? 1.0 : state === 'overcharged' ? 0.85 : 0.45;
+
+          if (isDimmed) {
+            vfxState = 3; // Smoldering embers!
+            intensity = 0.22;
+          }
+
+          vfxItems.push({
+            id: node.id,
+            x: pos.x,
+            y: pos.y,
+            radius: pos.r,
+            intensity,
+            state: vfxState,
+            seed: ((node.loc || 1) * 3.17 + pos.r * 7.1) % 100.0,
+          });
+        }
+      }
+    }
+
+    const vfxRes = this.vfxEngine
+      ? this.vfxEngine.render(this.camera, vfxItems, nowSec)
+      : { hasActiveAnimation: false };
+
     // Determine if next frame should be scheduled
     const hasActiveAnimation =
       cam.animating ||
       (!this.realisticMode && !!this.selectedNodeId) ||
+      (this.devToolsMode && !this.realisticMode && vfxRes.hasActiveAnimation) ||
       this.pulseManager.hasActivePulses(time);
 
     return { hasActiveAnimation };
   }
 
+  /**
+   * Draw classical Witch Hat Atelier archipelago boundary rings
+   * Active in BOTH default interactive mode and realistic art mode!
+   */
   private drawClustersBackdrop(
     ctx: CanvasRenderingContext2D,
     vp: ViewportBounds,
-    lod: 0 | 1 | 2
+    _lod: 0 | 1 | 2
   ): void {
-    if (this.realisticMode) return;
+    const isArt = this.realisticMode;
 
     for (const cluster of this.clusters) {
       const r = cluster.radius;
       if (
-        cluster.x + r < vp.x1 ||
-        cluster.x - r > vp.x2 ||
-        cluster.y + r < vp.y1 ||
-        cluster.y - r > vp.y2
+        cluster.x + r + 50 < vp.x1 ||
+        cluster.x - r - 50 > vp.x2 ||
+        cluster.y + r + 50 < vp.y1 ||
+        cluster.y - r - 50 > vp.y2
       ) {
         continue;
       }
@@ -201,21 +288,53 @@ export class WorldRenderer {
       ctx.save();
       ctx.translate(cluster.x, cluster.y);
 
-      // Subtle atmospheric boundary
-      ctx.beginPath();
-      ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(20, 19, 17, 0.09)';
-      ctx.lineWidth = 1.0;
-      ctx.setLineDash([6, 8]);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (isArt) {
+        // Authentic Monochrome Manga Inscription Ring
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.strokeStyle = '#141311';
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
 
-      if (lod >= 1) {
-        ctx.font = '12px Palatino, Georgia, serif';
-        ctx.fillStyle = 'rgba(20, 19, 17, 0.45)';
-        ctx.textAlign = 'center';
-        ctx.fillText(`✦ ${cluster.name} ✦`, 0, -r - 14);
+        ctx.beginPath();
+        ctx.arc(0, 0, r - 8, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(20, 19, 17, 0.28)';
+        ctx.lineWidth = 0.8;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 4 Cardinal keystone marks
+        for (let i = 0; i < 4; i++) {
+          const a = (i * Math.PI) / 2;
+          ctx.beginPath();
+          ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 2.8, 0, Math.PI * 2);
+          ctx.fillStyle = '#141311';
+          ctx.fill();
+        }
+      } else {
+        // Interactive Mode: Golden Parchment Boundary Ring
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(196, 139, 38, 0.32)';
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([8, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, r - 6, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(20, 19, 17, 0.10)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
       }
+
+      // Archipelago Title (Visible across all zoom levels for structural clarity)
+      ctx.font = 'bold 13px Palatino, Georgia, serif';
+      ctx.fillStyle = isArt ? '#141311' : 'rgba(20, 19, 17, 0.72)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`✦ ${cluster.name} ✦`, 0, -r - 10);
 
       ctx.restore();
     }
@@ -243,8 +362,21 @@ export class WorldRenderer {
     ctx.lineWidth = 1.4;
     ctx.stroke();
 
-    // Sacred Sectors
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.97, 0, Math.PI * 2);
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // Sacred Sector Mandala Slices
     this.mandalaSectors.forEach((sec) => {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, R, sec.angleStart, sec.angleEnd);
+      ctx.closePath();
+      ctx.strokeStyle = '#141311';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.arc(0, 0, R, sec.angleStart, sec.angleEnd);
@@ -273,16 +405,34 @@ export class WorldRenderer {
     ctx.restore();
   }
 
+  /**
+   * Draw ink connection lines with smart LOD filtering to prevent visual clutter
+   */
   private drawEdges(ctx: CanvasRenderingContext2D, vp: ViewportBounds, _lod: 0 | 1 | 2): void {
     if (this.realisticMode) return;
 
     const activeNodeId = this.selectedNodeId || this.hoveredNodeId;
     const pulseOffset = this.pulseOffset;
+    const isZoomedFarOut = this.camera.zoom < 0.32;
 
     for (const edge of this.edges) {
       const s = this.nodeMap.get(edge.source);
       const t = this.nodeMap.get(edge.target);
       if (!s || !t) continue;
+
+      // Smart LOD: When zoomed far out and no node is actively inspected,
+      // filter out noisy internal button/icon micro-links, keeping major structural arteries clear!
+      if (isZoomedFarOut && !activeNodeId && !this.unifiedMode) {
+        const isInterCluster = s.cluster !== t.cluster;
+        const isCoreEdge =
+          s.cluster?.includes('Core') ||
+          t.cluster?.includes('Core') ||
+          s.isSharedHub ||
+          t.isSharedHub;
+        if (!isInterCluster && !isCoreEdge) {
+          continue;
+        }
+      }
 
       const p1 = this.getNodePos(s);
       const p2 = this.getNodePos(t);
@@ -312,34 +462,55 @@ export class WorldRenderer {
         edge.source !== activeNodeId &&
         edge.target !== activeNodeId;
 
+      const isHotConnectedEdge =
+        this.devToolsMode &&
+        isConnectedToActive &&
+        (s.metrics?.devTools?.overloadState === 'fissure' ||
+          s.metrics?.devTools?.overloadState === 'overcharged' ||
+          t.metrics?.devTools?.overloadState === 'fissure' ||
+          t.metrics?.devTools?.overloadState === 'overcharged');
+
+      const isCircularLoop = this.devToolsMode && (edge.isCircular || false);
+      const isCyclesFilter = this.devToolsMode && this.diagnosticFilter === 'cycles';
+      const isOrphansFilter = this.devToolsMode && this.diagnosticFilter === 'orphans';
+
       ctx.save();
 
       if (isLineageEdge || isConnectedToActive) {
-        // Active golden flowing thread
-        ctx.strokeStyle = '#c48b26';
+        // Active flowing golden / fiery ink thread
+        ctx.strokeStyle = isHotConnectedEdge ? '#d43827' : isCircularLoop ? '#a82adb' : '#c48b26';
         ctx.lineWidth = 2.4;
         ctx.setLineDash([8, 4]);
-        ctx.lineDashOffset = -pulseOffset;
+        ctx.lineDashOffset = -(isHotConnectedEdge ? pulseOffset * 2.2 : pulseOffset);
         ctx.globalAlpha = 1.0;
-      } else if (isDimmed) {
-        ctx.strokeStyle = 'rgba(20, 19, 17, 0.08)';
-        ctx.lineWidth = 0.8;
+      } else if (isCircularLoop) {
+        // Vibrant purple Ouroboros cycle thread
+        ctx.strokeStyle = '#a82adb';
+        ctx.lineWidth = isCyclesFilter ? 2.8 : 2.2;
+        ctx.setLineDash([6, 3]);
+        ctx.lineDashOffset = -(pulseOffset * 1.5);
+        ctx.globalAlpha = 1.0;
+      } else if (isCyclesFilter || isOrphansFilter || isDimmed) {
+        // Soft whisper threads: don't delete lines, keep them subtle so orphan circles pop out!
+        ctx.strokeStyle = 'rgba(20, 19, 17, 0.04)';
+        ctx.lineWidth = 0.6;
       } else {
-        ctx.strokeStyle = 'rgba(20, 19, 17, 0.20)';
+        ctx.strokeStyle = 'rgba(20, 19, 17, 0.16)';
         ctx.lineWidth = 1.0;
       }
 
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
 
-      // Curved ink line
+      // Graceful curved ink line (quill stroke)
       const mx = (p1.x + p2.x) / 2;
       const my = (p1.y + p2.y) / 2;
       const dx = p2.x - p1.x;
       const dy = p2.y - p1.y;
-      const bend = Math.min(30, Math.hypot(dx, dy) * 0.08);
-      const cx = mx - (dy / (Math.hypot(dx, dy) || 1)) * bend;
-      const cy = my + (dx / (Math.hypot(dx, dy) || 1)) * bend;
+      const dist = Math.hypot(dx, dy) || 1;
+      const bend = Math.min(28, dist * 0.07);
+      const cx = mx - (dy / dist) * bend;
+      const cy = my + (dx / dist) * bend;
 
       ctx.quadraticCurveTo(cx, cy, p2.x, p2.y);
       ctx.stroke();
@@ -390,9 +561,29 @@ export class WorldRenderer {
         !isHovered &&
         (this.unifiedMode ? this.lineageNodeIds && this.lineageNodeIds.has(node.id) : isConnected);
 
-      const isDimmed =
-        !isArt && !this.unifiedMode && !!activeNodeId && !isSelected && !isConnected && !isHovered;
+      let isDimmedByDiag = false;
+      if (this.devToolsMode && this.diagnosticFilter !== 'all') {
+        if (this.diagnosticFilter === 'cycles' && !node.isCircular) isDimmedByDiag = true;
+        else if (this.diagnosticFilter === 'orphans' && !node.isOrphan) isDimmedByDiag = true;
+        else if (this.diagnosticFilter === 'hot') {
+          const st = node.metrics?.devTools?.overloadState;
+          if (st !== 'overcharged' && st !== 'fissure') isDimmedByDiag = true;
+        }
+      }
 
+      const isDimmed =
+        isDimmedByDiag ||
+        (!isArt && !this.unifiedMode && !!activeNodeId && !isSelected && !isConnected && !isHovered);
+
+      ctx.save();
+      // Keep unselected elements visible at exactly 20% opacity (or 12% in focused diagnostic mode)
+      if (isDimmed) {
+        ctx.globalAlpha = isDimmedByDiag ? 0.10 : 0.20;
+      } else {
+        ctx.globalAlpha = 1.0;
+      }
+
+      // 1. Lineage / Connection aura
       if (shouldShowAura) {
         ctx.save();
         ctx.translate(pos.x, pos.y);
@@ -406,13 +597,31 @@ export class WorldRenderer {
         ctx.restore();
       }
 
-      ctx.save();
-      if (isDimmed) {
-        ctx.globalAlpha = 0.78;
-        ctx.filter = 'grayscale(55%)';
-      } else {
-        ctx.globalAlpha = 1.0;
-        ctx.filter = 'none';
+      // 2. DevTools Mode: Ouroboros Circular Loop Aura
+      if (this.devToolsMode && !isArt && node.isCircular) {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = '#a82adb';
+        ctx.lineWidth = 2.0;
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -this.auraDashOffset * 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 3. DevTools Mode: Ashen Dead Code Ghost Contour
+      if (this.devToolsMode && !isArt && node.isOrphan) {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = this.diagnosticFilter === 'orphans' ? '#c48b26' : '#8a857b';
+        ctx.lineWidth = this.diagnosticFilter === 'orphans' ? 2.4 : 1.6;
+        ctx.setLineDash([3, 4]);
+        ctx.stroke();
+        ctx.restore();
       }
 
       const origX = node.x;

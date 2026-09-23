@@ -405,10 +405,22 @@ body.art-mode .search-box {
   height: 100%;
   overflow: hidden;
   cursor: grab;
+  background: #f7f4e8;
 }
 
 #viewport-container:active {
   cursor: grabbing;
+}
+
+#grimoire-vfx-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 1;
 }
 
 #grimoire-canvas {
@@ -418,6 +430,7 @@ body.art-mode .search-box {
   width: 100%;
   height: 100%;
   display: block;
+  z-index: 2;
 }
 
 /* ═══════════ FLOATING ZOOM HUD ═══════════ */
@@ -695,4 +708,295 @@ body.art-mode .search-box {
 
 .open-ide-btn:hover {
   background: #333;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DEVTOOLS MODE & DIAGNOSTICS OVERLAY
+   ═══════════════════════════════════════════════════════════════════ */
+
+.action-btn.devtools-active {
+  background: #2a2012;
+  color: #f7cb59;
+  border-color: #d49826;
+  box-shadow: 0 0 10px rgba(212, 152, 38, 0.35);
+}
+
+.devtools-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem;
+  background: rgba(26, 22, 16, 0.05);
+  border: 1px solid rgba(196, 139, 38, 0.45);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+
+.devtools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.devtools-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #8c5d14;
+}
+
+.health-pill {
+  padding: 0.2rem 0.55rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.health-harmonious {
+  background: #e4f4e7;
+  color: #17682f;
+  border: 1px solid #7bc68d;
+}
+
+.health-warm {
+  background: #fdf3df;
+  color: #9c630a;
+  border: 1px solid #f0bc59;
+}
+
+.health-overcharged {
+  background: #fde8e3;
+  color: #b52a16;
+  border: 1px solid #f38f7d;
+}
+
+.health-fissure {
+  background: #fce1dd;
+  color: #941304;
+  border: 1px solid #d43b28;
+  animation: pulse-danger 1.5s infinite;
+}
+
+@keyframes pulse-danger {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 59, 40, 0.4); }
+  50% { box-shadow: 0 0 6px 2px rgba(212, 59, 40, 0.3); }
+}
+
+.devtools-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--border-line);
+  border-radius: 4px;
+  padding: 0.5rem;
+  text-align: center;
+}
+
+.devtools-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.devtools-stat .stat-label {
+  font-size: 0.65rem;
+  color: var(--ink-secondary);
+  text-transform: uppercase;
+}
+
+.devtools-stat .stat-value {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.stat-value.score-harmonious { color: #1c7343; }
+.stat-value.score-warm { color: #a88915; }
+.stat-value.score-overcharged { color: #b83a14; }
+.stat-value.score-fissure { color: #941304; }
+
+.devtools-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.devtools-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-secondary);
+}
+
+.risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.risk-item {
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  border-left: 3px solid;
+}
+
+.risk-item.severity-high {
+  background: #fdf0ed;
+  border-color: #d43b28;
+  color: #7d1c10;
+}
+
+.risk-item.severity-medium {
+  background: #fdf7ec;
+  border-color: #e0961b;
+  color: #7a4a06;
+}
+
+.risk-item.severity-low {
+  background: #f6f8fb;
+  border-color: #106ba3;
+  color: #0b4970;
+}
+
+.risk-type {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.15rem;
+}
+
+.severity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dot-high { background: #d43b28; }
+.dot-medium { background: #e0961b; }
+.dot-low { background: #106ba3; }
+
+.risk-msg {
+  line-height: 1.35;
+}
+
+.devtools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.chip {
+  padding: 0.2rem 0.45rem;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border-line);
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: var(--ink-secondary);
+}
+
+.heavy-libs-warning {
+  padding: 0.35rem 0.5rem;
+  background: #fdf5e6;
+  border: 1px solid #ebd298;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  color: #8c5d14;
+}
+
+.refactor-tips {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tip-item {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--ink-primary);
+  padding: 0.25rem 0.4rem;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 3px;
+}
+
+/* Quick Audit Diagnostic Pills */
+.pill-btn.pill-diag-cycle.active {
+  background: #a82adb;
+  color: #fff;
+  border-color: #8c1db8;
+}
+
+.pill-btn.pill-diag-orphan.active {
+  background: #78756d;
+  color: #fff;
+  border-color: #5e5a52;
+}
+
+.pill-btn.pill-diag-hot.active {
+  background: #d43827;
+  color: #fff;
+  border-color: #aa2414;
+}
+
+/* Ouroboros Cycle Box */
+.devtools-cycle-box {
+  background: rgba(168, 42, 219, 0.07);
+  border: 1px solid rgba(168, 42, 219, 0.35);
+  border-radius: 4px;
+  padding: 0.55rem;
+}
+
+.cycle-desc {
+  font-size: 0.7rem;
+  color: var(--ink-secondary);
+  line-height: 1.35;
+  margin-bottom: 0.35rem;
+}
+
+.cycle-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.cycle-crumb-item {
+  padding: 0.15rem 0.4rem;
+  background: rgba(168, 42, 219, 0.15);
+  color: #6a1394;
+  border-radius: 3px;
+}
+
+.cycle-crumb-item.active {
+  background: #a82adb;
+  color: #fff;
+}
+
+.cycle-arrow {
+  color: #a82adb;
+  font-weight: bold;
+}
+
+/* Dead Code Box */
+.devtools-orphan-box {
+  background: rgba(120, 117, 109, 0.08);
+  border: 1px solid rgba(120, 117, 109, 0.3);
+  border-radius: 4px;
+  padding: 0.55rem;
+}
+
+.orphan-desc {
+  font-size: 0.72rem;
+  color: var(--ink-secondary);
+  line-height: 1.35;
 }

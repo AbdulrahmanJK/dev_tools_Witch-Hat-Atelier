@@ -31,6 +31,7 @@ export interface DetectedHook {
 export interface DetectedComponent {
   name: string;
   kind: string;
+  isMemo?: boolean;
   startLine: number;
   endLine: number;
   loc: number;
@@ -38,6 +39,7 @@ export interface DetectedComponent {
   hooksUsed: DetectedHook[];
   renderedChildren: string[];
   reduxDispatches: string[];
+  inlineCallbacks?: Array<{ propName: string; line?: number }>;
   internalCircuit: {
     stateVariables: Array<{ name: string; setter: string; line?: number }>;
     effects: Array<{ line?: number; deps: string[] }>;
@@ -282,6 +284,7 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
     const stateVariables: Array<{ name: string; setter: string; line?: number }> = [];
     const effectList: Array<{ line?: number; deps: string[] }> = [];
     const internalHandlers: Array<{ name: string; loc: number; line?: number }> = [];
+    const inlineCallbacks: Array<{ propName: string; line?: number }> = [];
 
     // Props extraction
     if (fnNode.params && fnNode.params.length > 0) {
@@ -469,6 +472,23 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
           renderedChildren.add(tag);
         }
       },
+
+      JSXAttribute(aPath: any) {
+        const propName = aPath.node.name?.name || '';
+        const val = aPath.node.value;
+        if (val && val.type === 'JSXExpressionContainer') {
+          const expr = val.expression;
+          if (
+            expr &&
+            (expr.type === 'ArrowFunctionExpression' || expr.type === 'FunctionExpression')
+          ) {
+            inlineCallbacks.push({
+              propName,
+              line: aPath.node.loc?.start?.line,
+            });
+          }
+        }
+      },
     });
 
     const startLine = fnNode.loc?.start?.line || 1;
@@ -487,6 +507,7 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
         : fnNode.type === 'ArrowFunctionExpression'
           ? 'arrow'
           : 'function',
+      isMemo: isWrapped && (wrapperType === 'memo' || wrapperType === 'PureComponent'),
       startLine,
       endLine,
       loc: endLine - startLine + 1,
@@ -494,6 +515,7 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       hooksUsed,
       renderedChildren: Array.from(renderedChildren),
       reduxDispatches,
+      inlineCallbacks,
       internalCircuit,
       codeInventory,
     };
