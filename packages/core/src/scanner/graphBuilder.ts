@@ -3,30 +3,44 @@ import path from 'node:path';
 import type { ArchitectureViolation, CircularLoop, DiagnosticsSummary, RawGraphData, SealEdge, SealNode } from '../types/index.js';
 import { AliasResolver } from './aliasResolver.js';
 import { parseFileToAst } from './astParser.js';
-import { detectFileEntities, type DetectedEntities } from './detector.js';
+import { detectFileEntities, detectPartialFileEntities, type DetectedEntities } from './detector.js';
 import { calculateComponentMetrics, calculateNonComponentMetrics } from './metrics.js';
 import { detectVueFileEntities } from './vueDetector.js';
 import { FrameworkDetector } from './frameworkDetector.js';
 import { collectDependencySeals } from './dependencyScanner.js';
+import { scanStaticSource, staticLanguageForExtension, type StaticFileAnalysis, type StaticSymbol } from './staticLanguages.js';
+import { readParseCache, writeParseCache, type CachedParse } from './parseCache.js';
+
+// Graph identifiers and browser-facing file names use one separator on every OS.
+export const portablePath = (value: string): string => value.replace(/\\/g, '/');
+
+export interface GraphBuildProgress {
+  phase: 'discovering' | 'parsing' | 'nodes' | 'edges' | 'diagnostics' | 'dependencies' | 'layout' | 'layout-clusters' | 'layout-finalizing' | 'transferring';
+  completed?: number;
+  total?: number;
+  file?: string;
+  warning?: string;
+}
 
 export class GraphBuilder {
   private projectRoot: string;
   private resolver: AliasResolver;
-  private srcDir: string;
   private frameworkDetector: FrameworkDetector;
 
   constructor(projectRoot: string) {
     this.projectRoot = path.resolve(projectRoot);
     this.resolver = new AliasResolver(this.projectRoot);
     this.frameworkDetector = new FrameworkDetector(this.projectRoot);
-    this.srcDir = path.join(this.projectRoot, 'src');
-    if (!fs.existsSync(this.srcDir)) {
-      this.srcDir = this.projectRoot;
-    }
   }
 
-  public buildGraph(): RawGraphData {
-    const files = this.collectSourceFiles(this.srcDir);
+  public buildGraph(onProgress?: (progress: GraphBuildProgress) => void): RawGraphData {
+    onProgress?.({ phase: 'discovering' });
+    const files = this.collectSourceFiles(this.projectRoot, (count, currentDir) => {
+      onProgress?.({ phase: 'discovering', completed: count, file: portablePath(path.relative(this.projectRoot, currentDir)) });
+    });
+    const previousCache = readParseCache(this.projectRoot);
+    const nextCache: Record<string, CachedParse> = {};
+    onProgress?.({ phase: 'parsing', completed: 0, total: files.length });
     const fileDataMap = new Map<
       string,
       {
@@ -35,31 +49,63 @@ export class GraphBuilder {
         loc: number;
         entities: DetectedEntities;
         error: string | null;
+        staticAnalysis?: StaticFileAnalysis;
       }
     >();
     const nodes: SealNode[] = [];
     const fileToNodeIds = new Map<string, string[]>();
     let locTotal = 0;
+    let parseWarnings = 0;
+    const parseCoverage = { complete: 0, partial: 0, unreadable: 0, warnings: 0, cached: 0 };
 
     // 1. Parse each file
-    for (const filePath of files) {
-      const relPath = path.relative(this.projectRoot, filePath);
+    for (const [index, filePath] of files.entries()) {
+      const relPath = portablePath(path.relative(this.projectRoot, filePath));
       const ext = path.extname(filePath).toLowerCase();
 
       let entities: DetectedEntities;
       let error: string | null = null;
       let loc = 0;
+      let staticAnalysis: StaticFileAnalysis | undefined;
+      let mode: CachedParse['mode'] = 'complete';
 
-      if (ext === '.vue') {
-        const content = fs.readFileSync(filePath, 'utf8');
-        loc = content.split('\n').length;
-        entities = detectVueFileEntities(content, filePath);
+      const stat = fs.statSync(filePath);
+      const cached = previousCache[relPath];
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size
+        && Array.isArray(cached.entities?.imports) && Array.isArray(cached.entities?.components)
+        && ['complete', 'partial', 'unreadable'].includes(cached.mode)) {
+        ({ entities, error, loc, staticAnalysis, mode } = cached);
+        parseCoverage.cached++;
       } else {
-        const parseRes = parseFileToAst(filePath);
-        error = parseRes.error;
-        loc = parseRes.code.split('\n').length;
-        entities = detectFileEntities(parseRes.ast, parseRes.code, filePath);
+
+        const staticLanguage = staticLanguageForExtension(ext);
+        if (staticLanguage) {
+          const content = fs.readFileSync(filePath, 'utf8');
+          loc = content.split('\n').length;
+          staticAnalysis = scanStaticSource(content, staticLanguage);
+          entities = detectFileEntities(null, '', filePath);
+        } else if (ext === '.vue') {
+          const content = fs.readFileSync(filePath, 'utf8');
+          loc = content.split('\n').length;
+          entities = detectVueFileEntities(content, filePath);
+        } else {
+          const parseRes = parseFileToAst(filePath);
+          error = parseRes.error;
+          loc = parseRes.code.split('\n').length;
+          try {
+            entities = parseRes.ast ? detectFileEntities(parseRes.ast, parseRes.code, filePath)
+              : detectPartialFileEntities(parseRes.code, filePath);
+            mode = !parseRes.ast && !parseRes.code ? 'unreadable' : parseRes.mode === 'complete' ? 'complete' : 'partial';
+          } catch (detectError) {
+            entities = detectPartialFileEntities(parseRes.code, filePath);
+            error = `${error ? `${error}; ` : ''}${detectError instanceof Error ? detectError.message : String(detectError)}`;
+            mode = 'partial';
+          }
+        }
       }
+
+      parseCoverage[mode]++;
+      nextCache[relPath] = { mtimeMs: stat.mtimeMs, size: stat.size, loc, entities, error, mode, staticAnalysis };
 
       locTotal += loc;
       fileDataMap.set(filePath, {
@@ -68,15 +114,42 @@ export class GraphBuilder {
         loc,
         entities,
         error,
+        staticAnalysis,
       });
+      if (error) {
+        parseWarnings++;
+        parseCoverage.warnings++;
+        if (parseWarnings <= 20) onProgress?.({ phase: 'parsing', completed: index + 1, total: files.length, file: relPath, warning: `${relPath}: ${error}` });
+      }
+      else if ((index + 1) % 50 === 0 || index + 1 === files.length) onProgress?.({ phase: 'parsing', completed: index + 1, total: files.length, file: relPath });
     }
+    writeParseCache(this.projectRoot, nextCache);
+    if (parseWarnings > 20) onProgress?.({ phase: 'parsing', completed: files.length, total: files.length, warning: `${parseWarnings - 20} more parse warnings omitted from log.` });
 
     // 2. Create Nodes
+    onProgress?.({ phase: 'nodes', completed: 0, total: files.length });
+    let nodeFiles = 0;
     for (const [filePath, data] of fileDataMap.entries()) {
+      nodeFiles++;
+      if (nodeFiles % 100 === 0 || nodeFiles === files.length) onProgress?.({ phase: 'nodes', completed: nodeFiles, total: files.length, file: data.relPath });
       const { relPath, loc, entities } = data;
       const cluster = this.determineCluster(relPath);
       const nodeIdsForThisFile: string[] = [];
       const ext = path.extname(filePath).toLowerCase();
+      if (data.staticAnalysis) {
+        const analysis = data.staticAnalysis;
+        const topLevel = analysis.symbols.filter((symbol) => !symbol.container && ['class', 'interface', 'struct', 'record', 'enum', 'object', 'function'].includes(symbol.kind));
+        const selected = topLevel.length ? topLevel : [{ name: path.basename(filePath, ext), kind: 'module', line: 1, endLine: loc } as StaticSymbol];
+        for (const symbol of selected) {
+          const id = `${relPath}#${symbol.name}@${symbol.line}`;
+          const members = symbol.kind === 'module' ? analysis.symbols : analysis.symbols.filter((entry) => entry === symbol || entry.container === symbol.name);
+          const node = this.createStaticNode(id, relPath, cluster, loc, symbol, members, analysis);
+          nodes.push(node);
+          nodeIdsForThisFile.push(id);
+        }
+        fileToNodeIds.set(filePath, nodeIdsForThisFile);
+        continue;
+      }
       const detection = this.frameworkDetector.detect(filePath, entities);
       const framework = detection.framework;
 
@@ -96,6 +169,7 @@ export class GraphBuilder {
             id,
             name: comp.name,
             file: relPath,
+            sourceLine: comp.startLine || 1,
             kind: 'component',
             language: ext === '.ts' || ext === '.tsx' ? 'typescript' : 'javascript',
             framework,
@@ -120,7 +194,7 @@ export class GraphBuilder {
       } else {
         // Module Node (Redux, API, Utils, Constants, Hooks)
         const baseName = path.basename(filePath, path.extname(filePath));
-        let category = 'utils';
+        let category: NonNullable<SealNode['moduleCategory']> = 'utils';
         if (relPath.includes('api')) category = 'api';
         else if (relPath.includes('redux')) category = 'redux';
         else if (relPath.includes('constants') || relPath.includes('mock')) category = 'constants';
@@ -136,7 +210,8 @@ export class GraphBuilder {
           id,
           name: baseName,
           file: relPath,
-          kind: category as any,
+          kind: 'module',
+          moduleCategory: category,
           language: ext === '.ts' || ext === '.tsx' ? 'typescript' : 'javascript',
           framework,
           frameworkVersion: detection.version,
@@ -156,6 +231,7 @@ export class GraphBuilder {
     }
 
     // 3. Build Edges
+    onProgress?.({ phase: 'edges', completed: 0, total: files.length });
     const edges: SealEdge[] = [];
     const edgeSet = new Set<string>();
     const architectureViolations: ArchitectureViolation[] = [];
@@ -167,7 +243,10 @@ export class GraphBuilder {
       nodesByName.set(key, [...(nodesByName.get(key) || []), node]);
     }
 
+    let linkedFiles = 0;
     for (const [filePath, data] of fileDataMap.entries()) {
+      linkedFiles++;
+      if (linkedFiles % 100 === 0 || linkedFiles === files.length) onProgress?.({ phase: 'edges', completed: linkedFiles, total: files.length, file: data.relPath });
       const sourceNodeIds = fileToNodeIds.get(filePath) || [];
       if (sourceNodeIds.length === 0) continue;
       const primarySourceId = sourceNodeIds[0];
@@ -178,7 +257,7 @@ export class GraphBuilder {
         const resolvedPath = this.resolver.resolve(imp.source, filePath);
         if (resolvedPath && fileToNodeIds.has(resolvedPath)) {
           const targetNodeIds = fileToNodeIds.get(resolvedPath) || [];
-          const targetCluster = this.determineCluster(path.relative(this.projectRoot, resolvedPath));
+          const targetCluster = this.determineCluster(portablePath(path.relative(this.projectRoot, resolvedPath)));
           const pactViolation = this.determineCluster(data.relPath).startsWith('Atelier:') && targetCluster.startsWith('Province:');
           if (pactViolation && targetNodeIds[0]) {
             const violation: ArchitectureViolation = {
@@ -245,7 +324,31 @@ export class GraphBuilder {
       }
     }
 
+    // Only connect Java/Kotlin imports when the fully qualified name matches a unique local symbol.
+    const staticByQualifiedName = new Map<string, SealNode[]>();
+    for (const node of nodes) {
+      if (node.analysisMode !== 'static' || !node.sourceNamespace) continue;
+      const qualifiedName = `${node.sourceNamespace}.${node.name}`;
+      staticByQualifiedName.set(qualifiedName, [...(staticByQualifiedName.get(qualifiedName) || []), node]);
+    }
+    for (const [filePath, data] of fileDataMap) {
+      if (!data.staticAnalysis || !['java', 'kotlin'].includes(data.staticAnalysis.language)) continue;
+      const sourceIds = fileToNodeIds.get(filePath) || [];
+      for (const imported of data.staticAnalysis.imports) {
+        const targets = staticByQualifiedName.get(imported) || [];
+        if (targets.length !== 1) continue;
+        for (const sourceId of sourceIds) {
+          const targetId = targets[0]!.id;
+          const edgeKey = `${sourceId}->${targetId}`;
+          if (sourceId === targetId || edgeSet.has(edgeKey)) continue;
+          edgeSet.add(edgeKey);
+          edges.push({ source: sourceId, target: targetId, type: 'import', _key1: edgeKey, _key2: `${targetId}->${sourceId}` });
+        }
+      }
+    }
+
     // 4. Summarize Archipelagos (Clusters)
+    onProgress?.({ phase: 'diagnostics' });
     const clusterMap = new Map<string, string[]>();
     nodes.forEach((n) => {
       const cName = n.cluster || 'Core & Root';
@@ -282,6 +385,7 @@ export class GraphBuilder {
       architectureViolations,
     };
 
+    onProgress?.({ phase: 'dependencies' });
     return {
       nodes,
       edges,
@@ -294,6 +398,7 @@ export class GraphBuilder {
         totalEdges: edges.length,
         totalClusters: clusters.length,
         locTotal,
+        parseCoverage,
       },
     };
   }
@@ -408,6 +513,7 @@ export class GraphBuilder {
     let orphanLOC = 0;
 
     nodes.forEach((n) => {
+      if (n.analysisMode === 'static') return;
       const lowerName = n.name.toLowerCase();
       const isEntryPoint =
         n.cluster?.includes('Core') ||
@@ -425,8 +531,46 @@ export class GraphBuilder {
     return { orphanNodeIds, orphanLOC };
   }
 
+  private createStaticNode(
+    id: string, relPath: string, cluster: string, fileLoc: number,
+    symbol: StaticSymbol, members: StaticSymbol[], analysis: StaticFileAnalysis
+  ): SealNode {
+    const isClass = ['class', 'interface', 'struct', 'record', 'enum', 'object'].includes(symbol.kind);
+    const loc = symbol.kind === 'module' ? fileLoc : Math.max(1, symbol.endLine - symbol.line + 1);
+    const metrics = calculateNonComponentMetrics({ loc, filePath: relPath, imports: analysis.imports.map((source) => ({ source })) }, symbol.kind);
+    const methodCount = members.filter((entry) => entry.kind === 'method' || entry.kind === 'function').length;
+    const fieldCount = members.filter((entry) => entry.kind === 'field' || entry.kind === 'property').length;
+    metrics.geometry = isClass ? 'faceted-strengthen' : 'circle';
+    metrics.isClass = isClass;
+    metrics.element = isClass ? 'Earth' : symbol.kind === 'function' ? 'Fire' : 'Arcane';
+    metrics.radialSigns = [];
+    if (methodCount) metrics.radialSigns.push({ type: 'column', size: 14, loc: methodCount, label: `${methodCount} methods / functions` });
+    if (fieldCount) metrics.radialSigns.push({ type: 'focus', size: 14, loc: fieldCount, label: `${fieldCount} fields / properties` });
+    const constructs = symbol.kind === 'module' ? { loops: 0, branches: 0, awaits: 0 } : symbol.constructs;
+    if (constructs?.loops) metrics.radialSigns.push({ type: 'repetition', size: 14, loc: constructs.loops, label: `${constructs.loops} loops` });
+    if (constructs?.branches) metrics.radialSigns.push({ type: 'convergence', size: 14, loc: constructs.branches, label: `${constructs.branches} branches` });
+    if (constructs?.awaits) metrics.radialSigns.push({ type: 'bolt', size: 14, loc: constructs.awaits, label: `${constructs.awaits} await` });
+    if (analysis.imports.length && symbol.kind === 'module') metrics.radialSigns.push({ type: 'collection', size: 13, loc: analysis.imports.length, label: `${analysis.imports.length} imports` });
+    if (members.some((entry) => entry.modifiers?.some((modifier) => modifier === 'async' || modifier === 'suspend')) || symbol.modifiers?.some((modifier) => modifier === 'async' || modifier === 'suspend')) {
+      metrics.radialSigns.push({ type: 'bolt', size: 13, loc: 1, label: 'async / suspend' });
+    }
+    metrics.keystones = isClass ? ['Strengthen'] : ['Column'];
+    metrics.keystoneDetails = [];
+    metrics.grade = isClass ? 'Class Seal' : symbol.kind === 'function' ? 'Function Seal' : 'Module Seal';
+    metrics.stabilityNote = `${analysis.language.toUpperCase()} ${symbol.kind}. Static source map; runtime profiling unavailable.`;
+    metrics.devTools = undefined;
+    return {
+      id, name: symbol.name, file: relPath,
+      kind: isClass ? 'class' : symbol.kind === 'function' ? 'function' : 'module',
+      language: analysis.language, framework: 'none', cluster, loc, hooks: [], children: [], metrics,
+      sourceLine: symbol.line, sourceSymbols: members, sourceNamespace: analysis.namespace, sourceImports: analysis.imports,
+      sourceAbsolutePath: path.join(this.projectRoot, relPath),
+      analysisMode: 'static', x: 0, y: 0,
+    };
+  }
+
   public determineCluster(relPath: string): string {
-    const parts = relPath.split(path.sep);
+    const parts = portablePath(relPath).split('/');
     const cleanParts = parts[0] === 'src' ? parts.slice(1) : parts;
     if (cleanParts.length <= 1) {
       return 'Great Citadel (Core & Root)';
@@ -476,32 +620,27 @@ export class GraphBuilder {
     return `Archipelago: ${topDir}`;
   }
 
-  public collectSourceFiles(dir: string): string[] {
+  public collectSourceFiles(dir: string, onProgress?: (count: number, currentDir: string) => void): string[] {
     const results: string[] = [];
     if (!fs.existsSync(dir)) return results;
-
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!['node_modules', 'build', 'dist', '.git', '.idea', '.dsh', '.grimoire'].includes(entry.name)) {
-          results.push(...this.collectSourceFiles(fullPath));
-        }
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (['.js', '.jsx', '.ts', '.tsx', '.vue'].includes(ext)) {
-          if (
-            !entry.name.includes('.test.') &&
-            !entry.name.includes('.spec.') &&
-            entry.name !== 'setupTests.js'
-          ) {
-            results.push(fullPath);
-          }
+    const ignored = new Set(['node_modules', 'build', 'dist', '.git', '.idea', '.dsh', '.grimoire', '.yarn', '.next', '.nuxt', '.output', '.cache', '.turbo', 'coverage', 'storybook-static']);
+    const extensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.vue', '.go', '.java', '.kt', '.kts', '.cs']);
+    let visitedDirectories = 0;
+    const walk = (currentDir: string) => {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          if (!ignored.has(entry.name)) walk(fullPath);
+        } else if (entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase())) {
+          if (!entry.name.includes('.test.') && !entry.name.includes('.spec.') && entry.name !== 'setupTests.js') results.push(fullPath);
         }
       }
-    }
-
+      visitedDirectories++;
+      if (visitedDirectories % 50 === 0) onProgress?.(results.length, currentDir);
+    };
+    walk(dir);
+    onProgress?.(results.length, dir);
     return results;
   }
 }

@@ -1,4 +1,5 @@
 import _traverse from '@babel/traverse';
+import ts from 'typescript';
 import type { DiagnosticFinding } from '../types/index.js';
 
 const traverse: typeof _traverse = ((_traverse as any).default || _traverse) as any;
@@ -74,6 +75,56 @@ export interface DetectedEntities {
   antiPatterns: AntiPattern[];
   hasJsx: boolean;
   isUtility: boolean;
+}
+
+// The TypeScript compiler keeps a usable syntax tree even when a file contains
+// syntax errors that stop Babel. These findings are deliberately conservative:
+// imports and visibly JSX-bearing declarations survive, but uncertain links do
+// not become invented components.
+export function detectPartialFileEntities(code: string, filePath: string): DetectedEntities {
+  const result = detectFileEntities(null, code, filePath);
+  const kind = /\.tsx$/.test(filePath) ? ts.ScriptKind.TSX : /\.jsx$/.test(filePath) ? ts.ScriptKind.JSX
+    : /\.tsx?$/.test(filePath) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+  const ast = ts.createSourceFile(filePath, code, ts.ScriptTarget.Latest, false, kind);
+  const line = (node: ts.Node) => ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1;
+  const addImport = (source: string, names: string[], node: ts.Node) => {
+    if (!source) return;
+    result.imports.push({ source, specifiers: names.map((local) => ({ local })), line: line(node) });
+  };
+  const hasJsx = (node: ts.Node): boolean => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) return true;
+    return ts.forEachChild(node, hasJsx) || false;
+  };
+  const addComponent = (name: string, node: ts.Node) => {
+    if (!/^[A-Z][A-Za-z0-9_$]*$/.test(name) || !hasJsx(node) || result.components.some((item) => item.name === name)) return;
+    const startLine = line(node);
+    const endLine = ast.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+    result.components.push({ name, kind: 'fallback', startLine, endLine, loc: endLine - startLine + 1, props: [],
+      hooksUsed: [], renderedChildren: [], reduxDispatches: [],
+      internalCircuit: { stateVariables: [], effects: [], handlers: [] },
+      codeInventory: { maps: [], filters: [], reduces: [], forEaches: [], loops: [], arrays: 0, sets: 0,
+        recordMaps: 0, asyncCount: 0, isClass: ts.isClassDeclaration(node) } });
+    result.hasJsx = true;
+    result.isUtility = false;
+  };
+  for (const statement of ast.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const clause = statement.importClause;
+      const names = clause?.name ? [clause.name.text] : [];
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings)) names.push(...bindings.elements.map((item) => item.name.text));
+      addImport(statement.moduleSpecifier.text, names, statement);
+    } else if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+      addImport(statement.moduleSpecifier.text, [], statement);
+    }
+    if (ts.isFunctionDeclaration(statement) && statement.name) addComponent(statement.name.text, statement);
+    if (ts.isClassDeclaration(statement) && statement.name) addComponent(statement.name.text, statement);
+    if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.initializer) addComponent(declaration.name.text, declaration.initializer);
+    }
+  }
+  return result;
 }
 
 export function detectFileEntities(ast: any, _code: string, _filePath: string): DetectedEntities {

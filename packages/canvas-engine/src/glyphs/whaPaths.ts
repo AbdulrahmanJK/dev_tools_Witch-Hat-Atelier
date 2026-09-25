@@ -5,6 +5,16 @@ export interface GlyphPathData {
 }
 
 export const CANONICAL_GLYPHS: Record<string, GlyphPathData> = {
+  arcane: {
+    w: 24,
+    h: 24,
+    d: 'M12 1L15 9L23 12L15 15L12 23L9 15L1 12L9 9Z M12 6V18 M6 12H18',
+  },
+  bolt: {
+    w: 11,
+    h: 13,
+    d: 'M6.8 0L1 7H5L3.7 13 11 5H6.5L6.8 0Z',
+  },
   aeroform: {
     w: 37.8465,
     h: 27.8461,

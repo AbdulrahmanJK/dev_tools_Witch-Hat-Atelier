@@ -7,6 +7,6 @@ export * from './scanner/frameworkDetector.js';
 export * from './scanner/dependencyScanner.js';
 export * from './scanner/metrics.js';
 export * from './scanner/graphBuilder.js';
+export * from './scanner/staticLanguages.js';
 export * from './layout/nestedPacker.js';
-export * from './layout/unifiedFractalLayout.js';
 export * from './layout/clusterLayout.js';

@@ -1,11 +1,15 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { DevToolsTelemetryEvent, SealNode } from '@wha/core';
 import { Camera, WorldRenderer, VFXEngine } from '@wha/canvas-engine';
 import { useGrimoireStore } from '../store/useGrimoireStore.js';
+import { translate } from '../i18n.js';
 import { DevtoolsOverview } from './DevtoolsOverview.js';
+import type { WebpackBuildStatus } from '../transport/transport.js';
+import { DevtoolsWorkbench } from './DevtoolsWorkbench.js';
 
 export interface WhaCanvasHandle {
   focusNode: (nodeId: string) => void;
+  focusDependency: (dependencyId: string) => void;
   fitKingdom: () => void;
   fitNodes: (nodeIds: string[]) => void;
   showTelemetry: (nodeId: string, event: DevToolsTelemetryEvent, telemetry?: SealNode['telemetry']) => void;
@@ -13,47 +17,76 @@ export interface WhaCanvasHandle {
 
 interface WhaCanvasProps {
   onMount?: (handle: WhaCanvasHandle) => void;
-  onMeasureBuild?: () => Promise<{ measured: number }>;
+  onMeasureBuild?: (appId?: string) => Promise<{ measured: number }>;
+  onImportWebpackStats?: (relativePath: string) => Promise<{ measured: number }>;
+  onGetWebpackBuildStatus?: () => Promise<WebpackBuildStatus>;
+  onStartWebpackBuild?: (appId: string, script: string, statsPath: string) => Promise<WebpackBuildStatus>;
+  onStopWebpackBuild?: () => Promise<WebpackBuildStatus>;
+  onStartLocator?: () => Promise<{ locate: boolean; expiresAt: number }>;
 }
 
-export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild }) => {
+export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild, onImportWebpackStats, onGetWebpackBuildStatus, onStartWebpackBuild, onStopWebpackBuild, onStartLocator }) => {
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [overlapPicker, setOverlapPicker] = useState<{ x: number; y: number; nodes: SealNode[] } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const vfxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<WorldRenderer | null>(null);
   const vfxEngineRef = useRef<VFXEngine | null>(null);
   const cameraRef = useRef<Camera | null>(null);
+  const hoveredDependencyIdRef = useRef<string | null>(null);
   const renderScheduledRef = useRef(false);
+  const fullRenderRequiredRef = useRef(false);
+  const renderFrameRef = useRef<number | null>(null);
+  const animationTimerRef = useRef<number | null>(null);
 
   const graph = useGrimoireStore((s) => s.graph);
   const selectedNodeId = useGrimoireStore((s) => s.selectedNodeId);
   const selectedDependencyId = useGrimoireStore((s) => s.selectedDependencyId);
   const lineageNodes = useGrimoireStore((s) => s.lineageNodes);
-  const lineageEdges = useGrimoireStore((s) => s.lineageEdges);
   const activeFilter = useGrimoireStore((s) => s.activeFilter);
-  const unifiedMode = useGrimoireStore((s) => s.unifiedMode);
   const realisticMode = useGrimoireStore((s) => s.realisticMode);
+  const lightweightMode = useGrimoireStore((s) => s.lightweightMode);
   const devToolsMode = useGrimoireStore((s) => s.devToolsMode);
   const diagnosticFilter = useGrimoireStore((s) => s.diagnosticFilter);
   const zoomPercent = useGrimoireStore((s) => s.zoomPercent);
+  const locale = useGrimoireStore((s) => s.locale);
+  useEffect(() => { if (!devToolsMode) setAnalysisOpen(false); }, [devToolsMode]);
 
-  const requestRender = useCallback(() => {
+  const requestRender = useCallback((effectsOnly = false) => {
+    if (document.hidden) return;
+    if (!effectsOnly) fullRenderRequiredRef.current = true;
+    if (animationTimerRef.current !== null) {
+      window.clearTimeout(animationTimerRef.current);
+      animationTimerRef.current = null;
+    }
     if (renderScheduledRef.current) return;
     renderScheduledRef.current = true;
 
-    requestAnimationFrame((time) => {
+    renderFrameRef.current = requestAnimationFrame((time) => {
+      renderFrameRef.current = null;
       renderScheduledRef.current = false;
-      if (!rendererRef.current || !cameraRef.current) return;
+      if (document.hidden || !rendererRef.current || !cameraRef.current) return;
 
-      const { hasActiveAnimation } = rendererRef.current.render(time);
+      const renderer = rendererRef.current;
+      const camera = cameraRef.current;
+      const fullRender = fullRenderRequiredRef.current || !renderer.canRenderEffectsOnly();
+      fullRenderRequiredRef.current = false;
+      const { hasActiveAnimation } = fullRender ? renderer.render(time) : renderer.renderEffectsOnly(time);
 
-      const currentPct = Math.round(cameraRef.current.zoom * 100);
+      const percent = camera.zoom * 100;
+      const currentPct = percent < 0.1 ? Number(percent.toPrecision(2)) : percent < 10 ? Number(percent.toFixed(1)) : Math.round(percent);
       const store = useGrimoireStore.getState();
       if (currentPct !== store.zoomPercent) {
         store.setZoomPercent(currentPct);
       }
 
-      if (hasActiveAnimation) {
-        requestRender();
+      if (hasActiveAnimation && !camera.animating) {
+        // Ambient effects remain animated; a fresh interaction or telemetry event
+        // still schedules its next frame immediately.
+        const graphSize = rendererRef.current.nodes.length;
+        const ambientFps = graphSize > 500 ? 20 : graphSize > 200 ? 24 : 30;
+        // Leave room for the next display frame after the timer fires.
+        animationTimerRef.current = window.setTimeout(() => requestRender(true), Math.max(0, 1000 / ambientFps - 16));
       }
     });
   }, []);
@@ -64,6 +97,7 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
     if (!canvas || !vfxCanvas) return;
 
     const camera = new Camera(canvas);
+    camera.reducedMotion = useGrimoireStore.getState().lightweightMode;
     const renderer = new WorldRenderer(canvas, camera);
     const vfxEngine = new VFXEngine(vfxCanvas);
 
@@ -94,12 +128,30 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
     };
 
     window.addEventListener('resize', handleResize);
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
+        if (animationTimerRef.current !== null) window.clearTimeout(animationTimerRef.current);
+        renderFrameRef.current = null;
+        animationTimerRef.current = null;
+        renderScheduledRef.current = false;
+      } else requestRender();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
     handleResize();
 
     camera.onUpdate = () => requestRender();
 
-    camera.onClick = (_e, worldPos) => {
-      const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
+    camera.onClick = (event, worldPos) => {
+      const candidates = renderer.hitTestNodeCandidates(worldPos.x, worldPos.y, 8);
+      if (renderer.nodes.length > 1500 && camera.zoom < 0.07 && candidates.length > 1) {
+        const rect = canvas.getBoundingClientRect();
+        setOverlapPicker({ x: Math.max(8, Math.min(event.clientX - rect.left, camera.width - 270)),
+          y: Math.max(8, Math.min(event.clientY - rect.top, camera.height - 320)), nodes: candidates });
+        return;
+      }
+      setOverlapPicker(null);
+      const hit = candidates[0] || null;
       const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
       const store = useGrimoireStore.getState();
       if (hit) {
@@ -113,6 +165,7 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
     };
 
     camera.onDoubleClick = (_e, worldPos) => {
+      setOverlapPicker(null);
       const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
       const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
       if (!hit && !dependency) {
@@ -126,9 +179,14 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
     };
 
     camera.onHover = (worldPos) => {
-      const hit = renderer.hitTestNode(worldPos.x, worldPos.y);
-      const dependency = renderer.hitTestDependency(worldPos.x, worldPos.y);
+      const hit = worldPos ? renderer.hitTestNode(worldPos.x, worldPos.y) : null;
+      const dependency = worldPos && !hit ? renderer.hitTestDependency(worldPos.x, worldPos.y) : null;
       const store = useGrimoireStore.getState();
+      const nextNodeId = hit?.id || null;
+      const nextDependencyId = hit ? null : dependency?.id || null;
+      if (renderer.hoveredNodeId === nextNodeId && hoveredDependencyIdRef.current === nextDependencyId) return;
+      const previousNodeId = renderer.hoveredNodeId;
+      hoveredDependencyIdRef.current = nextDependencyId;
       if (hit) {
         canvas.style.cursor = 'pointer';
         const screenPos = camera.worldToScreen(hit.x, hit.y);
@@ -144,9 +202,9 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
       } else {
         store.hoverNode(null);
         renderer.setHoveredNode(null);
-        canvas.style.cursor = dependency ? 'pointer' : '';
+        canvas.style.cursor = '';
       }
-      requestRender();
+      if (previousNodeId !== nextNodeId && renderer.hoverAffectsRender()) requestRender();
     };
 
     if (onMount) {
@@ -156,6 +214,10 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
           if (target) {
             camera.focusOnNode(target, 0.9);
           }
+        },
+        focusDependency: (dependencyId: string) => {
+          const target = renderer.dependencies.find((dependency) => dependency.id === dependencyId);
+          if (target) camera.animateTo(target.x, target.y, 0.85);
         },
         fitKingdom: () => {
           const currentGraph = useGrimoireStore.getState().graph;
@@ -196,6 +258,13 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
+      if (animationTimerRef.current !== null) window.clearTimeout(animationTimerRef.current);
+      renderFrameRef.current = null;
+      animationTimerRef.current = null;
+      renderScheduledRef.current = false;
+      fullRenderRequiredRef.current = false;
       camera.destroy();
       vfxEngine.destroy();
     };
@@ -206,6 +275,7 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
   // Update renderer when graph data changes
   useEffect(() => {
     if (rendererRef.current && cameraRef.current && graph) {
+      setOverlapPicker(null);
       rendererRef.current.setData(graph);
 
       if (!hasFittedRef.current) {
@@ -213,11 +283,12 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
         const rootNode = graph.nodes?.find(
           (n) => n.name === 'App' || (n.cluster && n.cluster.includes('Root'))
         );
-        if (rootNode) {
+        if (graph.nodes.length > 1500 && graph.bounds) {
+          cameraRef.current.fitBounds(graph.bounds, false);
+        } else if (rootNode) {
           cameraRef.current.x = rootNode.x;
           cameraRef.current.y = rootNode.y;
           cameraRef.current.zoom = 0.42;
-          useGrimoireStore.getState().selectNode(rootNode.id);
         } else if (graph.bounds) {
           cameraRef.current.fitBounds(graph.bounds);
         }
@@ -230,10 +301,10 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
   // Update renderer when selected node or lineage changes
   useEffect(() => {
     if (rendererRef.current) {
-      rendererRef.current.setSelectedNode(selectedNodeId, lineageNodes, lineageEdges);
+      rendererRef.current.setSelectedNode(selectedNodeId, lineageNodes);
       requestRender();
     }
-  }, [selectedNodeId, lineageNodes, lineageEdges, requestRender]);
+  }, [selectedNodeId, lineageNodes, requestRender]);
 
   useEffect(() => {
     if (!rendererRef.current) return;
@@ -245,15 +316,21 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
   useEffect(() => {
     if (rendererRef.current) {
       rendererRef.current.setModes({
-        unifiedMode,
         realisticMode,
+        lightweightMode,
         activeFilter,
         devToolsMode,
         diagnosticFilter,
       });
       requestRender();
     }
-  }, [unifiedMode, realisticMode, activeFilter, devToolsMode, diagnosticFilter, requestRender]);
+  }, [realisticMode, lightweightMode, activeFilter, devToolsMode, diagnosticFilter, requestRender]);
+
+  useEffect(() => {
+    if (!cameraRef.current) return;
+    cameraRef.current.reducedMotion = lightweightMode;
+    if (lightweightMode) cameraRef.current.stopAnimation();
+  }, [lightweightMode]);
 
   const handleZoomIn = () => {
     if (cameraRef.current) {
@@ -290,10 +367,28 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 2 }}
       />
 
-      <DevtoolsOverview onFocusNode={(nodeId) => {
+      {overlapPicker && <div className="overlap-picker" role="dialog" aria-label={locale === 'ru' ? 'Компоненты в этой точке' : 'Components at this point'} style={{ left: overlapPicker.x, top: overlapPicker.y }} onKeyDown={(event) => { if (event.key === 'Escape') setOverlapPicker(null); }}>
+        <div className="overlap-picker-title">{locale === 'ru' ? 'Выберите печать' : 'Choose a seal'}<button type="button" onClick={() => setOverlapPicker(null)} aria-label={translate(locale, 'close')}>×</button></div>
+        {overlapPicker.nodes.map((node) => <button key={node.id} type="button" className="overlap-picker-item" onClick={() => {
+          useGrimoireStore.getState().selectNode(node.id);
+          cameraRef.current?.focusOnNode(node, 0.9);
+          setOverlapPicker(null);
+        }}><strong>{node.name}</strong><small>{node.file}</small></button>)}
+        <p>{locale === 'ru' ? 'Если нужной печати нет, приблизьте карту.' : 'Zoom in if the seal you need is not listed.'}</p>
+      </div>}
+
+      <DevtoolsOverview onImportWebpackStats={onImportWebpackStats} onGetWebpackBuildStatus={onGetWebpackBuildStatus}
+        onStartWebpackBuild={onStartWebpackBuild} onStopWebpackBuild={onStopWebpackBuild} onFocusNode={(nodeId) => {
         const target = rendererRef.current?.nodeMap.get(nodeId);
         if (target) cameraRef.current?.focusOnNode(target, 0.9);
-      }} onMeasureBuild={onMeasureBuild} />
+      }} onMeasureBuild={onMeasureBuild} onOpenAnalysis={() => setAnalysisOpen(true)} />
+      {analysisOpen && <DevtoolsWorkbench onClose={() => setAnalysisOpen(false)} onFocusNode={(nodeId) => {
+        const target = rendererRef.current?.nodeMap.get(nodeId);
+        if (target) cameraRef.current?.focusOnNode(target, 0.9);
+      }} onFocusDependency={(dependencyId) => {
+        const target = rendererRef.current?.dependencies.find((item) => item.id === dependencyId);
+        if (target) cameraRef.current?.animateTo(target.x, target.y, 0.85);
+      }} onStartLocator={onStartLocator} />}
 
       {/* Canvas HUD */}
       <div className="canvas-hud">
@@ -303,6 +398,10 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild })
         <span className="zoom-level-text" id="zoom-text">
           {zoomPercent}%
         </span>
+        <button className="hud-btn hud-fit-btn" type="button" title={translate(locale, 'fitKingdom')} aria-label={translate(locale, 'fitKingdom')} onClick={() => {
+          const currentGraph = useGrimoireStore.getState().graph;
+          if (currentGraph?.bounds && cameraRef.current) cameraRef.current.fitBounds(currentGraph.bounds);
+        }}>⊞</button>
         <button className="hud-btn" id="btn-zoom-in" onClick={handleZoomIn}>
           +
         </button>

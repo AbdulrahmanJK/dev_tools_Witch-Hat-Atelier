@@ -20,6 +20,7 @@ export class Camera {
   public isDragging = false;
   public hasMoved = false;
   public animating = false;
+  public reducedMotion = false;
 
   private dragStart = { x: 0, y: 0 };
   private dragLast = { x: 0, y: 0 };
@@ -30,7 +31,9 @@ export class Camera {
   public onUpdate: (() => void) | null = null;
   public onClick: ((e: PointerEvent, worldPos: { x: number; y: number }) => void) | null = null;
   public onDoubleClick: ((e: MouseEvent, worldPos: { x: number; y: number }) => void) | null = null;
-  public onHover: ((worldPos: { x: number; y: number }) => void) | null = null;
+  public onHover: ((worldPos: { x: number; y: number } | null) => void) | null = null;
+  private hoverFrameId: number | null = null;
+  private pendingHover: { x: number; y: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -92,19 +95,29 @@ export class Camera {
     if (this.onUpdate) this.onUpdate();
   }
 
-  public fitBounds(bounds: { minX: number; minY: number; maxX: number; maxY: number }): void {
+  public fitBounds(bounds: { minX: number; minY: number; maxX: number; maxY: number }, animate = true): void {
     this.stopAnimation();
+    if (![bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].every(Number.isFinite)) return;
     const w = Math.max(100, bounds.maxX - bounds.minX);
     const h = Math.max(100, bounds.maxY - bounds.minY);
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cy = (bounds.minY + bounds.maxY) / 2;
 
-    const padding = 140;
-    const zoomX = (this.width - padding) / w;
-    const zoomY = (this.height - padding) / h;
-    const targetZoom = Math.max(this.minZoom, Math.min(0.85, Math.min(zoomX, zoomY)));
+    const padding = Math.min(140, this.width * 0.16, this.height * 0.16);
+    const zoomX = Math.max(1, this.width - padding) / w;
+    const zoomY = Math.max(1, this.height - padding) / h;
+    const targetZoom = Math.min(0.85, zoomX, zoomY);
+    // A fixed 4% floor clips large repositories. Keep room for one extra
+    // zoom-out step after fitting while preserving the normal small-map floor.
+    this.minZoom = Math.min(this.minZoom, targetZoom * 0.8);
 
-    this.animateTo(cx, cy, targetZoom);
+    if (animate) this.animateTo(cx, cy, targetZoom, this.zoom / targetZoom > 12 ? 180 : 400);
+    else {
+      this.x = cx;
+      this.y = cy;
+      this.zoom = targetZoom;
+      this.onUpdate?.();
+    }
   }
 
   public focusOnNode(node: SealNode, targetZoom = 0.9): void {
@@ -121,6 +134,13 @@ export class Camera {
 
   public animateTo(targetX: number, targetY: number, targetZoom: number, duration = 400): void {
     this.stopAnimation();
+    if (this.reducedMotion) {
+      this.x = targetX;
+      this.y = targetY;
+      this.zoom = targetZoom;
+      this.onUpdate?.();
+      return;
+    }
     const startX = this.x;
     const startY = this.y;
     const startZoom = this.zoom;
@@ -159,11 +179,17 @@ export class Camera {
       e.preventDefault();
       this.stopAnimation();
       const factor = e.deltaY < 0 ? 1.12 : 0.89;
-      this.zoomAt(e.clientX, e.clientY, factor);
+      const rect = el.getBoundingClientRect();
+      this.zoomAt(e.clientX - rect.left, e.clientY - rect.top, factor);
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      const wasAnimating = this.animating;
       this.stopAnimation();
+      if (wasAnimating) this.onUpdate?.();
+      if (this.hoverFrameId !== null) cancelAnimationFrame(this.hoverFrameId);
+      this.hoverFrameId = null;
+      this.pendingHover = null;
       this.isDragging = true;
       this.hasMoved = false;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -187,11 +213,32 @@ export class Camera {
         this.dragLast = { x: e.clientX, y: e.clientY };
 
         if (this.onUpdate) this.onUpdate();
-      } else if (this.onHover) {
-        const rect = el.getBoundingClientRect();
-        const worldPos = this.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
-        this.onHover(worldPos);
       }
+    };
+
+    const onCanvasPointerMove = (e: PointerEvent) => {
+      if (this.isDragging || !this.onHover) return;
+      this.pendingHover = { x: e.clientX, y: e.clientY };
+      if (this.hoverFrameId !== null) return;
+      this.hoverFrameId = requestAnimationFrame(() => {
+        this.hoverFrameId = null;
+        const point = this.pendingHover;
+        this.pendingHover = null;
+        if (!point || this.isDragging || !this.onHover) return;
+        const rect = el.getBoundingClientRect();
+        if (point.x < rect.left || point.x > rect.right || point.y < rect.top || point.y > rect.bottom) {
+          this.onHover(null);
+        } else {
+          this.onHover(this.screenToWorld(point.x - rect.left, point.y - rect.top));
+        }
+      });
+    };
+
+    const onCanvasPointerLeave = () => {
+      if (this.hoverFrameId !== null) cancelAnimationFrame(this.hoverFrameId);
+      this.hoverFrameId = null;
+      this.pendingHover = null;
+      if (!this.isDragging) this.onHover?.(null);
     };
 
     const onPointerUp = (e: PointerEvent) => {
@@ -203,9 +250,13 @@ export class Camera {
         // Ignore if pointer was lost
       }
 
+      const rect = el.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        this.onHover?.(null);
+      }
+
       // If user did not drag, trigger click
       if (!this.hasMoved && this.onClick) {
-        const rect = el.getBoundingClientRect();
         const worldPos = this.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
         this.onClick(e, worldPos);
       }
@@ -221,6 +272,8 @@ export class Camera {
 
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onCanvasPointerMove);
+    el.addEventListener('pointerleave', onCanvasPointerLeave);
     el.addEventListener('dblclick', onDblClick);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -228,9 +281,14 @@ export class Camera {
     this.unbindEvents = () => {
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('pointermove', onCanvasPointerMove);
+      el.removeEventListener('pointerleave', onCanvasPointerLeave);
       el.removeEventListener('dblclick', onDblClick);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      if (this.hoverFrameId !== null) cancelAnimationFrame(this.hoverFrameId);
+      this.hoverFrameId = null;
+      this.pendingHover = null;
     };
   }
 

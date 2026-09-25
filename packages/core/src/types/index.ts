@@ -54,6 +54,8 @@ export interface DependencySeal {
     initial: boolean;
     chunks: string[];
     measuredAt: number;
+    source?: 'vite' | 'webpack-stats';
+    configuration?: string;
   };
   runtime?: { selfTimeMs: number; sampleCount: number };
   x: number;
@@ -130,7 +132,14 @@ export interface SealNode {
   name: string;
   file: string;
   kind: 'component' | 'module' | 'class' | 'function' | 'hub';
+  moduleCategory?: 'utils' | 'api' | 'redux' | 'constants' | 'hook';
   language?: 'typescript' | 'javascript' | 'python' | 'go' | 'rust' | string;
+  sourceLine?: number;
+  sourceAbsolutePath?: string;
+  sourceSymbols?: Array<{ name: string; kind: string; line: number; endLine: number; signature?: string; container?: string; modifiers?: string[]; constructs?: { loops: number; branches: number; awaits: number } }>;
+  sourceNamespace?: string | null;
+  sourceImports?: string[];
+  analysisMode?: 'static' | 'framework';
   framework?: 'react' | 'vue' | 'svelte' | 'none';
   frameworkVersion?: string;
   cluster?: string;
@@ -147,12 +156,8 @@ export interface SealNode {
   consumers?: string[];
   reuseCount?: number;
   isSharedHub?: boolean;
-  domainSector?: 'FORGE' | 'SHELL' | 'COMMERCE' | 'OPERATIONS' | 'GOVERNANCE';
   x: number;
   y: number;
-  unifiedX?: number;
-  unifiedY?: number;
-  unifiedR?: number;
   isCircular?: boolean;
   circularLoopId?: string;
   circularPath?: string[];
@@ -234,43 +239,63 @@ export interface ArchipelagoCluster {
   radius: number;
 }
 
-export interface MandalaSector {
-  id: string;
-  name: string;
-  label: string;
-  element: SealElement;
-  angleStart: number;
-  angleEnd: number;
-  color: string;
-}
-
 export interface GrimoireGraph {
+  projectKey?: string;
+  projectRoot?: string;
+  capabilities?: ProjectCapabilities;
   nodes: SealNode[];
   edges: SealEdge[];
   clusters: ArchipelagoCluster[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
-  unifiedLayout?: {
-    rootRadius: number;
-    mandalaSectors: MandalaSector[];
-  };
   stats: {
     totalNodes: number;
     totalEdges: number;
     totalClusters: number;
     totalFiles: number;
     locTotal: number;
+    parseCoverage?: { complete: number; partial: number; unreadable: number; warnings: number; cached?: number };
   };
   diagnostics?: DiagnosticsSummary;
   dependencies?: DependencySeal[];
 }
 
+export interface ProjectApplication {
+  id: string;
+  name: string;
+  directory: string;
+  bundler: 'vite' | 'webpack' | 'other' | 'unknown';
+  framework: 'react' | 'vue' | 'mixed' | 'unknown';
+  devScripts: Array<{ name: string; command: string }>;
+  statsScripts?: Array<{ name: string; command: string }>;
+  entries: string[];
+}
+
+export interface ProjectCapabilities {
+  packageManager: 'pnpm' | 'yarn' | 'npm' | 'unknown';
+  applications: ProjectApplication[];
+  buildMeasurement: 'vite' | 'webpack-stats' | 'unavailable';
+  scanLanguages: string[];
+  allowedRuntimeOrigins?: string[];
+  existingStatsFiles?: string[];
+}
+
 export interface DevToolsTelemetryEvent {
-  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER' | 'DOM_UPDATE' | 'LONG_TASK';
+  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER' | 'DOM_UPDATE' | 'LONG_TASK' | 'INTERACTION' | 'LOCATE' | 'HELLO';
   source?: 'browser' | 'adapter' | 'fiber';
+  framework?: 'react' | 'vue';
   componentName: string;
+  pageId?: string;
+  runtimeId?: string;
+  parentRuntimeId?: string;
   parentComponentName?: string;
   hierarchyPath?: string[];
   commitId?: number;
+  interactionId?: number;
+  interactionType?: string;
+  interactionTarget?: string;
+  durationKind?: 'profiler-subtree' | 'vue-lifecycle' | 'browser-task' | 'event-timing' | 'unavailable';
+  reactiveTracked?: Array<{ targetId: string; key: string; operation: string }>;
+  reactiveTriggers?: Array<{ targetId: string; key: string; operation: string }>;
   nodeId?: string;
   file?: string;
   timestamp: number;

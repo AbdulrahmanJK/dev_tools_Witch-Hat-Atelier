@@ -1,6 +1,9 @@
 import React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useGrimoireStore } from '../store/useGrimoireStore.js';
 import type { ITransport } from '../transport/transport.js';
+import { adviceText, elementLabel, findingText, ratingText, riskText, translate } from '../i18n.js';
+import { SealPortrait } from './SealPortrait.js';
 
 interface InspectorDrawerProps {
   transport: ITransport;
@@ -9,6 +12,7 @@ interface InspectorDrawerProps {
 
 export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onFocusNode }) => {
   const {
+    locale,
     nodeMap,
     selectedNodeId,
     selectedDependencyId,
@@ -16,33 +20,41 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
     lineageNodes,
     isDrawerOpen,
     devToolsMode,
+    realisticMode,
     selectNode,
     setDrawerOpen,
-  } = useGrimoireStore();
+  } = useGrimoireStore(useShallow((state) => ({
+    locale: state.locale, nodeMap: state.isDrawerOpen ? state.nodeMap : null,
+    selectedNodeId: state.selectedNodeId, selectedDependencyId: state.selectedDependencyId,
+    graph: state.graph, lineageNodes: state.lineageNodes, isDrawerOpen: state.isDrawerOpen,
+    devToolsMode: state.devToolsMode, realisticMode: state.realisticMode,
+    selectNode: state.selectNode, setDrawerOpen: state.setDrawerOpen,
+  })));
 
-  if (!isDrawerOpen || (!selectedNodeId && !selectedDependencyId)) return null;
+  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
+  if (!isDrawerOpen || !nodeMap || (!selectedNodeId && !selectedDependencyId)) return null;
 
   const dependency = graph?.dependencies?.find((item) => item.id === selectedDependencyId);
   if (dependency) return (
     <aside id="inspector-drawer" className="open">
       <div className="scroll-header">
         <div>
-          <div className="seal-cluster-tag">✦ EXTERNAL LIBRARY</div>
+          <div className="seal-cluster-tag">✦ {t('externalLibrary')}</div>
           <h2 className="seal-title">{dependency.name}</h2>
-          <div className="seal-cluster-tag">{dependency.version || 'Version unknown'}</div>
+          <div className="seal-cluster-tag">{dependency.version || t('versionUnknown')}</div>
         </div>
         <button className="close-drawer-btn" onClick={() => setDrawerOpen(false)}>✕</button>
       </div>
       <div className="scroll-body">
         <div className="devtools-panel">
-          <div className="devtools-header"><span className="devtools-badge">✦ LIBRARY SEAL</span></div>
-          <p>Source import spread: {dependency.sourceRisk.toUpperCase()} · {dependency.direct ? 'declared dependency' : dependency.importCount ? 'not declared in the nearest package' : 'included transitively in the build'}</p>
-          <p>Imported in {dependency.importerNodeIds.length} code seals; {dependency.importCount} import declarations.</p>
-          {dependency.dynamicImportCount > 0 && <p>{dependency.dynamicImportCount} dynamic imports.</p>}
-          {dependency.build ? <p>Estimated emitted JavaScript: {Math.round((dependency.build.emittedBytesEstimate || 0) / 1024)} KiB across {dependency.build.chunks.length} chunks · {dependency.build.initial ? 'initial load' : 'outside initial entry'}. Rollup module length: {Math.round(dependency.build.renderedBytes / 1024)} KiB.</p> : <p>Bundle bytes have not been measured. Source imports alone cannot determine shipped size.</p>}
-          {dependency.build && <p>Ring colour follows estimated emitted JavaScript: green below 20 KiB, ochre below 100 KiB, red at 100 KiB or more.</p>}
-          {dependency.runtime && <p>Runtime samples: {dependency.runtime.sampleCount}, self time {dependency.runtime.selfTimeMs.toFixed(1)} ms.</p>}
-          <div className="devtools-section-title">Importing seals</div>
+          <div className="devtools-header"><span className="devtools-badge">✦ {t('librarySeal')}</span></div>
+          <p>{t('sourceSpread')}: {dependency.sourceRisk.toUpperCase()} · {dependency.direct ? t('declaredDependency') : dependency.importCount ? t('undeclaredDependency') : t('transitiveDependency')}</p>
+          <p>{t('importedIn')} {dependency.importerNodeIds.length} {t('codeSeals')}; {dependency.importCount} {t('importDeclarations')}.</p>
+          {dependency.dynamicImportCount > 0 && <p>{dependency.dynamicImportCount} {t('dynamicImports')}.</p>}
+          {dependency.build ? <p>{t('estimatedJs')}: {Math.round((dependency.build.emittedBytesEstimate || 0) / 1024)} KiB {t('acrossChunks')} {dependency.build.chunks.length} · {dependency.build.initial ? t('initialEntry') : t('outsideInitial')}. {t('rollupLength')}: {Math.round(dependency.build.renderedBytes / 1024)} KiB.</p> : <p>{t('bundleNotMeasured')}</p>}
+          {dependency.build && <p>{t('libraryRingScale')}</p>}
+          {dependency.runtime && <p>{t('bundleRuntime')}: {dependency.runtime.sampleCount}, {t('selfTime')} {dependency.runtime.selfTimeMs.toFixed(1)} ms.</p>}
+          <div className="devtools-section-title">{t('importingSeals')}</div>
           {dependency.importerNodeIds.map((id) => {
             const importer = nodeMap.get(id);
             return <button key={id} className="cycle-crumb-item" onClick={() => { selectNode(id); onFocusNode(id); }}>{importer?.name || id}</button>;
@@ -75,6 +87,14 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
   const hookCount = node.hooks?.length || metrics.hookCount || 0;
   const childCount = node.children?.length || metrics.childCount || 0;
   const circuit = node.internalCircuit || { stateVariables: [], effects: [], handlers: [] };
+  const staticSymbols = node.sourceSymbols?.filter((entry) => !(entry.name === node.name && entry.line === node.sourceLine)) || [];
+  const staticKindName = (kind: string) => {
+    const labels: Record<string, [string, string]> = {
+      class: ['класс', 'class'], interface: ['интерфейс', 'interface'], struct: ['структура', 'struct'], record: ['запись', 'record'], enum: ['перечисление', 'enum'], object: ['объект', 'object'],
+      function: ['функция', 'function'], method: ['метод', 'method'], property: ['свойство', 'property'], field: ['поле', 'field'], module: ['модуль', 'module'],
+    };
+    return labels[kind]?.[locale === 'ru' ? 0 : 1] || kind;
+  };
 
   const handleCrumbClick = (id: string) => {
     selectNode(id);
@@ -92,7 +112,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
   const handleOpenInEditor = (e: React.MouseEvent) => {
     e.preventDefault();
     if (node.file) {
-      transport.openFileInEditor(node.file, 1);
+      transport.openFileInEditor(node.sourceAbsolutePath || node.file, node.sourceLine || 1);
     }
   };
 
@@ -102,15 +122,16 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
         <div>
           <div className="seal-badge-row">
             <span className={`element-badge ${metrics.element.toLowerCase()}`}>
-              {metrics.element}
+              {elementLabel(locale, metrics.element)}
             </span>
             <span className={`grade-badge ${metrics.isForbidden ? 'forbidden' : ''}`}>
-              {metrics.grade}
+              {ratingText(locale, metrics.grade)}
             </span>
           </div>
           <h2 className="seal-title" id="insp-title">
             {node.name}
           </h2>
+          {node.analysisMode === 'static' && <div className="seal-cluster-tag">{node.language === 'csharp' ? 'C#' : node.language?.toUpperCase()} · {staticKindName(node.kind)} · {t('staticSource')}</div>}
           {node.framework && node.framework !== 'none' && <div className="seal-cluster-tag">{node.framework.toUpperCase()} {node.frameworkVersion || ''}</div>}
           <div className="seal-cluster-tag" id="insp-cluster">
             ✦ {node.cluster || 'Great Citadel'}
@@ -126,61 +147,62 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
       </div>
 
       <div className="scroll-body">
+        <SealPortrait key={node.id} node={node} locale={locale} realisticMode={realisticMode} />
         {/* DEVTOOLS DIAGNOSTIC OVERLAY */}
         {devToolsMode && metrics.devTools && (
           <div className="devtools-panel">
             <div className="devtools-header">
-              <span className="devtools-badge">⚡ DEVTOOLS DIAGNOSTICS</span>
+              <span className="devtools-badge">⚡ {t('diagnostics')}</span>
               <span className={`health-pill health-${metrics.devTools.overloadState}`}>
-                {metrics.devTools.healthScore}/100 • {metrics.devTools.overloadState.toUpperCase()}
+                {metrics.devTools.healthScore}/100 • {ratingText(locale, metrics.devTools.overloadState)}
               </span>
             </div>
 
             {metrics.devTools.findings && metrics.devTools.findings.length > 0 && (
               <div className="devtools-section">
-                <div className="devtools-section-title">Static findings</div>
+                <div className="devtools-section-title">{t('staticFindings')}</div>
                 {metrics.devTools.findings.map((finding) => <div key={finding.id} className="cycle-desc">
-                  <strong>{finding.rule}</strong> · {finding.severity} · {finding.confidence} confidence · <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(finding.file, finding.line)}>line {finding.line}</button><br />{finding.message}
-                  {finding.observedCount ? <><br />Runtime observed this prop's identity change {finding.observedCount} times during profiled subtree commits (last duration {finding.lastObservedDurationMs?.toFixed(1)} ms).</> : null}
+                  <strong>{finding.rule}</strong> · {ratingText(locale, finding.severity)} · {locale === 'ru' ? 'уверенность' : 'confidence'}: {ratingText(locale, finding.confidence)} · <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(finding.file, finding.line)}>{locale === 'ru' ? 'строка' : 'line'} {finding.line}</button><br />{findingText(locale, finding)}
+                  {finding.observedCount ? <><br />{locale === 'ru' ? `При измерении поддерева ссылка prop менялась ${finding.observedCount} раз (последняя длительность ${finding.lastObservedDurationMs?.toFixed(1)} мс).` : `Runtime observed this prop's identity change ${finding.observedCount} times during profiled subtree commits (last duration ${finding.lastObservedDurationMs?.toFixed(1)} ms).`}</> : null}
                 </div>)}
               </div>
             )}
 
             {graph?.diagnostics?.architectureViolations?.filter((violation) => violation.sourceNodeId === node.id).map((violation) => <div key={violation.id} className="devtools-section devtools-cycle-box">
-              <div className="devtools-section-title" style={{ color: '#b83a14' }}>✧ Architecture Pact</div>
-              <div className="cycle-desc">{violation.message}</div>
-              <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(violation.file, violation.line)}>Open line {violation.line}</button>
+              <div className="devtools-section-title" style={{ color: '#b83a14' }}>✧ {locale === 'ru' ? 'Архитектурная граница' : 'Architecture Pact'}</div>
+              <div className="cycle-desc">{locale === 'ru' ? 'Компонент импортирует страницу. Вынесите общий код в нейтральный модуль или измените направление зависимости.' : violation.message}</div>
+              <button className="cycle-crumb-item" onClick={() => transport.openFileInEditor(violation.file, violation.line)}>{locale === 'ru' ? 'Открыть строку' : 'Open line'} {violation.line}</button>
             </div>)}
 
             {/* Performance Grid */}
             {node.telemetry && <div className="devtools-section">
-              <div className="devtools-section-title">Runtime observations</div>
-              <div className="cycle-desc">{node.telemetry.updateCount || 0} measured re-renders · {node.telemetry.mountCount || 0} mounts · {node.telemetry.domUpdateCount || 0} browser DOM observations{(node.telemetry.updateCount || 0) > 0 ? ` · average update ${node.telemetry.avgUpdateDurationMs?.toFixed(1)} ms` : ''}</div>
-              {node.telemetry.isOverheating && <div className="cycle-desc">⚡ Hot: average profiled subtree update exceeds 16 ms after at least five updates.</div>}
-              {node.telemetry.hierarchyPath && node.telemetry.hierarchyPath.length > 1 && <div className="cycle-desc">Runtime path: {node.telemetry.hierarchyPath.join(' → ')}</div>}
-              {node.telemetry.lastReasons && node.telemetry.lastReasons.length > 0 && <div className="cycle-desc">Observed changes: {node.telemetry.lastReasons.join(', ')}. Parent activity is a correlation, not proof of cause.</div>}
+              <div className="devtools-section-title">{t('runtimeObservations')}</div>
+              <div className="cycle-desc">{node.telemetry.updateCount || 0} {t('measuredRerenders')} · {node.telemetry.mountCount || 0} mount · {node.telemetry.domUpdateCount || 0} {t('browserDom')}{(node.telemetry.updateCount || 0) > 0 ? ` · ${t('averageUpdate')} ${node.telemetry.avgUpdateDurationMs?.toFixed(1)} ms` : ''}</div>
+              {node.telemetry.isOverheating && <div className="cycle-desc">⚡ {t('hotExplanation')}</div>}
+              {node.telemetry.hierarchyPath && node.telemetry.hierarchyPath.length > 1 && <div className="cycle-desc">{t('runtimePath')}: {node.telemetry.hierarchyPath.join(' → ')}</div>}
+              {node.telemetry.lastReasons && node.telemetry.lastReasons.length > 0 && <div className="cycle-desc">{t('observedChanges')}: {node.telemetry.lastReasons.join(', ')}. {t('parentCaveat')}</div>}
             </div>}
             <div className="devtools-grid">
               <div className="devtools-stat">
-                <span className="stat-label">Health Score</span>
+                <span className="stat-label">{t('healthScore')}</span>
                 <span className={`stat-value score-${metrics.devTools.overloadState}`}>
                   {metrics.devTools.healthScore}
                 </span>
               </div>
               <div className="devtools-stat">
-                <span className="stat-label">Source Size</span>
+                <span className="stat-label">{t('sourceSize')}</span>
                 <span className="stat-value">
-                  {metrics.devTools.bundleImpact.rating.toUpperCase()}
+                  {ratingText(locale, metrics.devTools.bundleImpact.rating)}
                 </span>
               </div>
               <div className="devtools-stat">
-                <span className="stat-label">Complexity</span>
+                <span className="stat-label">{t('complexity')}</span>
                 <span className="stat-value">
-                  {metrics.devTools.complexity.rating.toUpperCase()}
+                  {ratingText(locale, metrics.devTools.complexity.rating)}
                 </span>
               </div>
               <div className="devtools-stat">
-                <span className="stat-label">Re-renders</span>
+                <span className="stat-label">{t('rerenderRisks')}</span>
                 <span className="stat-value">{metrics.devTools.rerenderRisks.length}</span>
               </div>
             </div>
@@ -189,11 +211,11 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
             {node.isCircular && node.circularPath && (
               <div className="devtools-section devtools-cycle-box">
                 <div className="devtools-section-title" style={{ color: '#8c1db8' }}>
-                  🔄 Ouroboros Circular Loop
+                  🔄 {t('circularLoop')}
                 </div>
                 <div className="cycle-path-container">
                   <div className="cycle-desc">
-                    Breaks HMR live reload, leaks memory, and risks undefined imports on startup:
+                    {t('cycleRisk')}
                   </div>
                   <div className="cycle-breadcrumbs">
                     {node.circularPath.map((name, i) => (
@@ -227,11 +249,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
             {node.isOrphan && (
               <div className="devtools-section devtools-orphan-box">
                 <div className="devtools-section-title" style={{ color: '#78756d' }}>
-                  🍂 Forgotten Scroll (Dead Code)
+                  🍂 {t('orphanModule')}
                 </div>
                 <div className="orphan-desc">
-                  Zero incoming imports or component renders across the entire kingdom. 
-                  This module ({loc} LOC) appears completely unused and can be safely pruned.
+                  {t('orphanNote')}
                 </div>
               </div>
             )}
@@ -239,16 +260,16 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
             {/* Rerender Risks List */}
             {metrics.devTools.rerenderRisks.length > 0 && (
               <div className="devtools-section">
-                <div className="devtools-section-title">🚨 Re-render Vulnerabilities</div>
+                <div className="devtools-section-title">🚨 {t('riskList')}</div>
                 <div className="risk-list">
                   {metrics.devTools.rerenderRisks.map((risk, idx) => (
                     <div key={idx} className={`risk-item severity-${risk.severity}`}>
                       <div className="risk-type">
                         <span className={`severity-dot dot-${risk.severity}`} />
                         {risk.type.replace('_', ' ').toUpperCase()}{' '}
-                        {risk.line ? `(line ${risk.line})` : ''}
+                        {risk.line ? `(${locale === 'ru' ? 'строка' : 'line'} ${risk.line})` : ''}
                       </div>
-                      <div className="risk-msg">{risk.message}</div>
+                      <div className="risk-msg">{riskText(locale, risk)}</div>
                     </div>
                   ))}
                 </div>
@@ -257,17 +278,17 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
 
             {/* Logic & State Complexity */}
             <div className="devtools-section">
-              <div className="devtools-section-title">🧠 Architecture & State Footprint</div>
+              <div className="devtools-section-title">🧠 {t('architectureState')}</div>
               <div className="devtools-chips">
                 <span className="chip">Cyclomatic: {metrics.devTools.complexity.cyclomatic}</span>
                 <span className="chip">useState: {metrics.devTools.complexity.stateCount}</span>
                 <span className="chip">useEffect: {metrics.devTools.complexity.effectCount}</span>
-                <span className="chip">Callbacks: {metrics.devTools.complexity.callbackCount}</span>
-                <span className="chip">Imports: {metrics.devTools.bundleImpact.importCount}</span>
+                <span className="chip">{t('callbacks')}: {metrics.devTools.complexity.callbackCount}</span>
+                <span className="chip">{t('imports')}: {metrics.devTools.bundleImpact.importCount}</span>
               </div>
               {metrics.devTools.bundleImpact.heavyLibraries.length > 0 && (
                 <div className="heavy-libs-warning">
-                  ⚠️ Heavy bundles: {metrics.devTools.bundleImpact.heavyLibraries.join(', ')}
+                  ⚠️ {t('heavyBundles')}: {metrics.devTools.bundleImpact.heavyLibraries.join(', ')}
                 </div>
               )}
             </div>
@@ -275,11 +296,11 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
             {/* Master Refactor Tips */}
             {metrics.devTools.refactorTips.length > 0 && (
               <div className="devtools-section">
-                <div className="devtools-section-title">💡 Master Refactor Advice</div>
+                <div className="devtools-section-title">💡 {t('refactorAdvice')}</div>
                 <ul className="refactor-tips">
                   {metrics.devTools.refactorTips.map((tip, idx) => (
                     <li key={idx} className="tip-item">
-                      ✦ {tip}
+                      ✦ {adviceText(locale, tip)}
                     </li>
                   ))}
                 </ul>
@@ -291,7 +312,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
         {/* Ancestral Lineage */}
         {lineageNodes.length > 0 && (
           <div id="insp-ancestry-section">
-            <div className="section-label">Ancestral Lineage (Цепочка от истока)</div>
+            <div className="section-label">{t('lineage')}</div>
             <div className="lineage-breadcrumbs">
               {lineageNodes.map((id, idx) => {
                 const n = nodeMap.get(id);
@@ -318,38 +339,53 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
             <div className="meta-item-val" id="insp-loc">
               {loc}
             </div>
-            <div className="meta-item-lbl">Lines of Code</div>
+            <div className="meta-item-lbl">{t('linesOfCode')}</div>
           </div>
           <div>
             <div className="meta-item-val" id="insp-hooks-count">
-              {hookCount}
+              {node.analysisMode === 'static' ? staticSymbols.length : hookCount}
             </div>
-            <div className="meta-item-lbl">Keystones</div>
+            <div className="meta-item-lbl">{node.analysisMode === 'static' ? t('sourceMembers') : t('keystones')}</div>
           </div>
           <div>
-            <div className="meta-item-val" id="insp-children-count">
-              {childCount}
-            </div>
-            <div className="meta-item-lbl">Sub-Glyphs</div>
+            <div className="meta-item-val" id="insp-children-count">{node.analysisMode === 'static' ? node.sourceImports?.length || 0 : childCount}</div>
+            <div className="meta-item-lbl">{node.analysisMode === 'static' ? t('imports') : t('subGlyphs')}</div>
           </div>
         </div>
 
-        {/* Stability & Day of Pact */}
+        {/* {t('stability')} */}
         <div>
-          <div className="section-label">Stability & Day of Pact</div>
+          <div className="section-label">{t('stability')}</div>
           <div
             className={`stability-card ${metrics.isForbidden ? 'forbidden-card' : ''}`}
             id="insp-stability-card"
           >
-            <div className="stability-title">{metrics.grade}</div>
-            <div className="stability-note">{metrics.stabilityNote}</div>
+            <div className="stability-title">{ratingText(locale, metrics.grade)}</div>
+            <div className="stability-note">{node.analysisMode === 'static' ? t('staticOnly') : metrics.stabilityNote}</div>
           </div>
         </div>
+
+        {node.analysisMode === 'static' && <div className="static-source-details">
+          {node.sourceNamespace && <p><strong>{t('sourceNamespace')}:</strong> {node.sourceNamespace}</p>}
+          {staticSymbols.length > 0 && <div>
+            <div className="section-label">{t('sourceSymbols')}</div>
+            <div className="static-symbol-list">{staticSymbols.map((symbol, index) => <button className="static-symbol-row" key={`${symbol.name}-${symbol.line}-${index}`} onClick={() => transport.openFileInEditor(node.sourceAbsolutePath || node.file, symbol.line)}>
+              <span className="static-symbol-kind">{staticKindName(symbol.kind)}</span>
+              <span className="static-symbol-main"><strong>{symbol.name}</strong><small>{symbol.signature || symbol.name}</small>{symbol.constructs && (symbol.constructs.loops || symbol.constructs.branches || symbol.constructs.awaits) ? <small>{[
+                symbol.constructs.loops ? `${symbol.constructs.loops} ${t('sourceLoops')}` : '',
+                symbol.constructs.branches ? `${symbol.constructs.branches} ${t('sourceBranches')}` : '',
+                symbol.constructs.awaits ? `${symbol.constructs.awaits} ${t('sourceAwaits')}` : '',
+              ].filter(Boolean).join(' · ')}</small> : null}</span>
+              <span className="static-symbol-line">{t('sourceLine')} {symbol.line}</span>
+            </button>)}</div>
+          </div>}
+          {!!node.sourceImports?.length && <details><summary>{t('sourceImports')} ({node.sourceImports.length})</summary><div className="static-import-list">{node.sourceImports.slice(0, 50).map((item, index) => <div key={`${item}-${index}`}>{item}</div>)}{node.sourceImports.length > 50 && <div>+{node.sourceImports.length - 50} {t('sourceMoreImports')}</div>}</div></details>}
+        </div>}
 
         {/* Master Forge Consumers (Shared Atelier Hubs) */}
         {node.isSharedHub && (node.consumers?.length || 0) > 0 && (
           <div id="insp-forge-section">
-            <div className="section-label">Master Forge Consumers (Питает модули)</div>
+            <div className="section-label">{t('consumers')}</div>
             <div className="link-pills">
               {node.consumers!.map((consumerId) => {
                 const c = nodeMap.get(consumerId);
@@ -367,26 +403,12 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
           </div>
         )}
 
-        {/* Code Construct Signs */}
-        {metrics.radialSigns && metrics.radialSigns.length > 0 && (
-          <div id="insp-inventory-section">
-            <div className="section-label">Code Construct Signs (Знаки кода)</div>
-            <div className="link-pills">
-              {metrics.radialSigns.map((sign, idx) => (
-                <span key={idx} className="node-link-pill">
-                  {sign.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Internal Circuit */}
         {(circuit.stateVariables?.length > 0 ||
           circuit.effects?.length > 0 ||
           circuit.handlers?.length > 0) && (
           <div id="insp-circuit-section">
-            <div className="section-label">Internal Circuit (Inscribed Sub-Seals)</div>
+            <div className="section-label">{t('internalCircuit')}</div>
             <div className="keystone-list">
               {circuit.stateVariables.map((v, i) => (
                 <div key={`s-${i}`} className="keystone-row">
@@ -418,10 +440,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
           </div>
         )}
 
-        {/* Enchanted Keystones (Hooks) */}
+        {/* {t('hooks')} */}
         {metrics.keystoneDetails && metrics.keystoneDetails.length > 0 && (
           <div>
-            <div className="section-label">Enchanted Keystones (Hooks)</div>
+            <div className="section-label">{t('hooks')}</div>
             <div className="keystone-list">
               {metrics.keystoneDetails.map((kd, idx) => (
                 <div key={idx} className="keystone-row">
@@ -438,7 +460,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
         {/* Rendered Children */}
         {node.children && node.children.length > 0 && (
           <div>
-            <div className="section-label">Sub-Glyphs Rendered (Children)</div>
+            <div className="section-label">{t('subGlyphs')}</div>
             <div className="link-pills">
               {node.children.map((chName) => {
                 const childNode = Array.from(nodeMap.values()).find((n) => n.name === chName);
@@ -458,7 +480,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
 
         {/* Open in Editor button */}
         <a className="open-ide-btn" id="btn-open-ide" href="#" onClick={handleOpenInEditor}>
-          <span>🖋</span> Inscribe in Editor
+          <span>🖋</span> {t('openEditor')}
         </a>
       </div>
     </aside>
