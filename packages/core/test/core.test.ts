@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { NestedPacker } from '../src/layout/nestedPacker.js';
 import { calculateComponentMetrics } from '../src/scanner/metrics.js';
+import { GraphBuilder, portablePath } from '../src/scanner/graphBuilder.js';
 import type { SealNode } from '../src/types/index.js';
 
 describe('@wha/core Critical Invariants', () => {
+  it('uses portable graph paths and clusters for Windows separators', () => {
+    expect(portablePath('packages\\web\\src\\App.tsx')).toBe('packages/web/src/App.tsx');
+    const builder = new GraphBuilder(process.cwd());
+    expect(builder.determineCluster('src\\components\\forms\\OrderForm.tsx')).toBe('Atelier: Forms & Inputs');
+  });
+
   it('strictly confines sub-seals within R_chamber and R_sub invariants', () => {
     const packer = new NestedPacker();
     const mockNode: SealNode = {

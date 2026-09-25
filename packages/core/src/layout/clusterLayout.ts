@@ -1,6 +1,5 @@
 import type { ArchipelagoCluster, DependencySeal, GrimoireGraph, RawGraphData, SealEdge, SealNode } from '../types/index.js';
 import { NestedPacker } from './nestedPacker.js';
-import { UnifiedFractalLayout } from './unifiedFractalLayout.js';
 
 export interface ClusterLayoutOptions {
   padding?: number;
@@ -16,16 +15,15 @@ interface PackedClusterInfo {
 export class ClusterLayout {
   private padding: number;
   private nestedPacker: NestedPacker;
-  private unifiedPacker: UnifiedFractalLayout;
 
   constructor(options: ClusterLayoutOptions = {}) {
     this.padding = options.padding || 32;
     this.nestedPacker = new NestedPacker();
-    this.unifiedPacker = new UnifiedFractalLayout();
   }
 
-  public computeLayout(graph: RawGraphData): GrimoireGraph {
+  public computeLayout(graph: RawGraphData, onProgress?: (phase: 'layout-clusters' | 'layout-finalizing', completed?: number, total?: number) => void): GrimoireGraph {
     const { nodes, edges, clusters } = graph;
+    this.populateSharedHubs(nodes, edges);
     const nodeMap = new Map<string, SealNode>(nodes.map((n: SealNode) => [n.id, n]));
 
     // 1. Group nodes by cluster
@@ -39,15 +37,18 @@ export class ClusterLayout {
 
     // 2. Pre-pack nodes inside each cluster locally around (0, 0) to know exact cluster radii
     const packedClustersMap = new Map<string, PackedClusterInfo>();
-    clusters.forEach((c) => {
+    onProgress?.('layout-clusters', 0, clusters.length);
+    clusters.forEach((c, index) => {
       const cNodes = clusterNodesMap.get(c.name) || [];
-      if (cNodes.length === 0) return;
-      const packed = this.packClusterNodes(cNodes, { x: 0, y: 0 });
-      packedClustersMap.set(c.name, {
-        name: c.name,
-        nodes: packed.nodes,
-        radius: packed.clusterRadius,
-      });
+      if (cNodes.length > 0) {
+        const packed = this.packClusterNodes(cNodes, { x: 0, y: 0 });
+        packedClustersMap.set(c.name, {
+          name: c.name,
+          nodes: packed.nodes,
+          radius: packed.clusterRadius,
+        });
+      }
+      if ((index + 1) % 5 === 0 || index + 1 === clusters.length) onProgress?.('layout-clusters', index + 1, clusters.length);
     });
 
     // 3. Compute Radial Grimoire cluster positions with affinity and relaxation
@@ -92,22 +93,7 @@ export class ClusterLayout {
       });
     }
 
-    // 5. Compute Unified Single Grand Spell Fractal Layout
-    const unifiedResult = this.unifiedPacker.computeUnifiedLayout(graph);
-    const unifiedMap = new Map<string, SealNode>(unifiedResult.nodes.map((n) => [n.id, n]));
-
-    layoutNodes.forEach((n) => {
-      const uNode = unifiedMap.get(n.id);
-      if (uNode) {
-        n.unifiedX = uNode.unifiedX;
-        n.unifiedY = uNode.unifiedY;
-        n.unifiedR = uNode.unifiedR;
-        n.consumers = uNode.consumers || [];
-        n.reuseCount = uNode.reuseCount || 0;
-        n.isSharedHub = !!uNode.isSharedHub;
-      }
-    });
-
+    onProgress?.('layout-finalizing');
     const dependencies = this.positionDependencies(graph.dependencies || [], layoutClusters);
 
     return {
@@ -118,11 +104,30 @@ export class ClusterLayout {
       bounds: this.calculateOverallBounds(layoutNodes, layoutClusters, dependencies),
       stats: graph.stats,
       diagnostics: graph.diagnostics,
-      unifiedLayout: {
-        rootRadius: unifiedResult.rootRadius,
-        mandalaSectors: unifiedResult.mandalaSectors,
-      },
     };
+  }
+
+  /** Reuse information is useful on the ordinary map and in the inspector. */
+  private populateSharedHubs(nodes: SealNode[], edges: SealEdge[]): void {
+    const root = nodes.find((node) => node.name === 'App' || node.cluster?.includes('Root'));
+    const consumers = new Map(nodes.map((node) => [node.id, new Set<string>()]));
+    const uniqueNames = new Map<string, SealNode>();
+    for (const node of nodes) if (!uniqueNames.has(node.name)) uniqueNames.set(node.name, node);
+    for (const edge of edges) {
+      if (edge.source !== root?.id && edge.source !== edge.target) consumers.get(edge.target)?.add(edge.source);
+    }
+    for (const parent of nodes) {
+      if (parent.id === root?.id) continue;
+      for (const name of parent.children || []) {
+        const child = uniqueNames.get(name);
+        if (child && child.id !== parent.id) consumers.get(child.id)?.add(parent.id);
+      }
+    }
+    for (const node of nodes) {
+      node.consumers = [...(consumers.get(node.id) || [])];
+      node.reuseCount = node.consumers.length;
+      node.isSharedHub = node.reuseCount >= 2;
+    }
   }
 
   private positionDependencies(dependencies: DependencySeal[], clusters: ArchipelagoCluster[]): DependencySeal[] {
@@ -263,6 +268,23 @@ export class ClusterLayout {
 
     // 4. Inward Centripetal Gravity + Collision Repulsion Relaxation Pass (90 iterations)
     const clusterKeys = Array.from(centers.keys());
+    if (clusterKeys.length > 250) {
+      let maxRadius = 150;
+      for (const key of clusterKeys) {
+        if (rootCluster && key === rootCluster.name) continue;
+        maxRadius = Math.max(maxRadius, packedMap.get(key)?.radius || 150);
+      }
+      const spacing = maxRadius * 2 + AIR_GAP;
+      let index = 0;
+      for (const key of clusterKeys) {
+        if (rootCluster && key === rootCluster.name) continue;
+        const angle = index * 2.39996;
+        const distance = rootRadius + spacing * Math.sqrt(index + 1);
+        centers.set(key, { x: Math.round(Math.cos(angle) * distance), y: Math.round(Math.sin(angle) * distance) });
+        index++;
+      }
+      return centers;
+    }
     const relaxationIterations = 90;
 
     for (let iter = 0; iter < relaxationIterations; iter++) {
@@ -344,7 +366,9 @@ export class ClusterLayout {
     const sorted = [...nodes].sort((a, b) => b.metrics.radius - a.metrics.radius);
     const placed: SealNode[] = [];
     const avgR = sorted.reduce((s, n) => s + n.metrics.radius, 0) / (sorted.length || 1);
-    const stepDist = avgR * 1.15 + this.padding;
+    const largeCluster = sorted.length > 250;
+    const maxR = largeCluster ? sorted[0]?.metrics.radius || 0 : 0;
+    const stepDist = largeCluster ? maxR * 2 + this.padding : avgR * 1.15 + this.padding;
 
     sorted.forEach((node, idx) => {
       if (idx === 0) {
@@ -366,7 +390,7 @@ export class ClusterLayout {
 
     // Collision Resolution inside cluster
     const iterations = 35;
-    for (let iter = 0; iter < iterations; iter++) {
+    for (let iter = 0; iter < (largeCluster ? 0 : iterations); iter++) {
       for (let i = 0; i < placed.length; i++) {
         for (let j = i + 1; j < placed.length; j++) {
           const n1 = placed[i]!;

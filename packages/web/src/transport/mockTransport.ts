@@ -70,9 +70,6 @@ export class MockTransport implements ITransport {
           },
           x: 0,
           y: 0,
-          unifiedX: 0,
-          unifiedY: 0,
-          unifiedR: 800,
         },
         {
           id: 'src/components/Header.tsx#Header',
@@ -98,9 +95,6 @@ export class MockTransport implements ITransport {
           },
           x: 0,
           y: -400,
-          unifiedX: 0,
-          unifiedY: -350,
-          unifiedR: 120,
         },
         {
           id: 'src/pages/Orders.tsx#Orders',
@@ -129,9 +123,6 @@ export class MockTransport implements ITransport {
           },
           x: 500,
           y: 0,
-          unifiedX: 400,
-          unifiedY: 0,
-          unifiedR: 140,
         },
       ],
       edges: [
@@ -180,29 +171,6 @@ export class MockTransport implements ITransport {
         },
       ],
       bounds: { minX: -600, minY: -600, maxX: 700, maxY: 600 },
-      unifiedLayout: {
-        rootRadius: 800,
-        mandalaSectors: [
-          {
-            id: 'shell',
-            name: 'NAVIGATION & SHELL',
-            label: 'Navigation & Shell',
-            element: 'Wind',
-            angleStart: -Math.PI * 0.75,
-            angleEnd: -Math.PI * 0.25,
-            color: '#1c7343',
-          },
-          {
-            id: 'commerce',
-            name: 'COMMERCE & PRODUCTS',
-            label: 'Commerce & Products',
-            element: 'Fire',
-            angleStart: -Math.PI * 0.25,
-            angleEnd: Math.PI * 0.25,
-            color: '#b83a14',
-          },
-        ],
-      },
       stats: {
         totalNodes: 3,
         totalEdges: 2,

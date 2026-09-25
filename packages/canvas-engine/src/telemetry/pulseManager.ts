@@ -14,6 +14,16 @@ export class PulseManager {
   private activePulses = new Map<string, ActivePulse>();
   private renderCounts = new Map<string, { count: number; windowStart: number }>();
 
+  public clear(): void {
+    this.activePulses.clear();
+    this.renderCounts.clear();
+  }
+
+  /** Includes an expired pulse until a full canvas frame clears its last pixels. */
+  public hasQueuedPulses(): boolean {
+    return this.activePulses.size > 0;
+  }
+
   public triggerPulse(nodeId: string, event: DevToolsTelemetryEvent): void {
     const now = performance.now();
 

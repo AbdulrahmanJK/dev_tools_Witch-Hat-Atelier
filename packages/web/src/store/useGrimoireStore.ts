@@ -1,29 +1,51 @@
 import type { DependencySeal, DevToolsTelemetryEvent, DiagnosticFilter, GrimoireGraph, SealNode } from '@wha/core';
 import { create } from 'zustand';
+import type { Locale } from '../i18n.js';
+import { buildSnapshot, matchTelemetry, MAX_SAVED_SESSIONS, MAX_SESSION_EVENTS, persistBuildSnapshots, persistSessions, projectKey, readBuildSnapshots, readSavedSessions, validSession, type BuildSnapshot, type EventMatch, type RecordedEvent, type RecordingSession } from '../devtools/session.js';
 
 const canonicalName = (name: string) => name.replace(/[^a-z0-9]/gi, '').toLowerCase();
-const normalizedSourceFile = (value?: string): string | undefined => {
-  if (!value) return undefined;
-  try { if (/^https?:/.test(value)) value = decodeURIComponent(new URL(value).pathname); }
-  catch { /* Keep the original source path. */ }
-  return value.split(/[?#]/)[0]?.replace(/\\/g, '/');
-};
-
+const isHotNode = (node: SealNode) => Boolean(node.telemetry?.isOverheating || ['overcharged', 'fissure'].includes(node.metrics?.devTools?.overloadState || ''));
+const findingIndexes = new WeakMap<GrimoireGraph, Map<string, string[]>>();
+function findingIndex(graph: GrimoireGraph | null): Map<string, string[]> {
+  if (!graph) return new Map();
+  const cached = findingIndexes.get(graph);
+  if (cached) return cached;
+  const index = new Map<string, string[]>();
+  for (const node of graph.nodes) for (const finding of node.metrics.devTools?.findings || []) {
+    if (!finding.childName || !finding.propName) continue;
+    const key = `${canonicalName(finding.childName)}:${finding.propName}`;
+    const ids = index.get(key) || [];
+    ids.push(node.id);
+    index.set(key, ids);
+  }
+  findingIndexes.set(graph, index);
+  return index;
+}
 export interface GrimoireState {
+  locale: Locale;
+  toggleLocale: () => void;
   graph: GrimoireGraph | null;
   nodes: SealNode[];
   nodeMap: Map<string, SealNode>;
+  hotNodeCount: number;
   browserLongTasks: { count: number; totalDurationMs: number };
   unmatchedRuntime: { renders: number; domUpdates: number };
   recentRenders: Array<DevToolsTelemetryEvent & { mappedNodeId?: string }>;
+  coverage: { received: number; matched: number; inferred: number; ambiguous: number; unmatched: number };
+  runtimeConnections: Record<string, DevToolsTelemetryEvent>;
+  currentSession: RecordingSession | null;
+  savedSessions: RecordingSession[];
+  recording: boolean;
+  buildSnapshots: BuildSnapshot[];
+  runtimeResolutions: Record<string, string>;
+  locatorResult: { event: DevToolsTelemetryEvent; match: EventMatch } | null;
   selectedNodeId: string | null;
   selectedDependencyId: string | null;
   hoveredNodeId: string | null;
   lineageNodes: string[];
-  lineageEdges: string[];
   activeFilter: string;
-  unifiedMode: boolean;
   realisticMode: boolean;
+  lightweightMode: boolean;
   devToolsMode: boolean;
   diagnosticFilter: DiagnosticFilter;
   searchQuery: string;
@@ -40,14 +62,22 @@ export interface GrimoireState {
   // Actions
   setGraph: (graph: GrimoireGraph) => void;
   recordTelemetry: (event: DevToolsTelemetryEvent) => string | null;
+  recordTelemetryBatch: (events: DevToolsTelemetryEvent[]) => Array<{ event: DevToolsTelemetryEvent; nodeId: string }>;
+  startRecording: () => void;
+  stopRecording: () => void;
+  clearRecording: () => void;
+  importSession: (value: unknown) => boolean;
+  resolveRuntime: (runtimeId: string, nodeId: string | null) => void;
+  resolveRecordedEvent: (eventId: string, nodeId: string | null) => void;
+  saveBuildSnapshot: (graph: GrimoireGraph) => void;
   selectNode: (nodeId: string | null) => void;
   selectDependency: (dependencyId: string | null) => void;
   hoverNode: (nodeId: string | null, clientX?: number, clientY?: number) => void;
   hoverDependency: (dependencyId: string | null, clientX?: number, clientY?: number) => void;
   setFilter: (filter: string) => void;
   setDiagnosticFilter: (diagFilter: DiagnosticFilter) => void;
-  toggleUnified: () => void;
   toggleRealistic: () => void;
+  toggleLightweight: () => void;
   toggleDevTools: () => void;
   setSearchQuery: (query: string) => void;
   setDrawerOpen: (open: boolean) => void;
@@ -55,20 +85,37 @@ export interface GrimoireState {
 }
 
 export const useGrimoireStore = create<GrimoireState>((set, get) => ({
+  locale: (() => {
+    try { const saved = localStorage.getItem('grimoire-locale'); if (saved === 'ru' || saved === 'en') return saved; } catch { /* No storage. */ }
+    return typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+  })(),
+  toggleLocale: () => set((state) => {
+    const locale = state.locale === 'ru' ? 'en' : 'ru';
+    try { localStorage.setItem('grimoire-locale', locale); } catch { /* No storage. */ }
+    return { locale };
+  }),
   graph: null,
   nodes: [],
   nodeMap: new Map(),
+  hotNodeCount: 0,
   browserLongTasks: { count: 0, totalDurationMs: 0 },
   unmatchedRuntime: { renders: 0, domUpdates: 0 },
   recentRenders: [],
+  coverage: { received: 0, matched: 0, inferred: 0, ambiguous: 0, unmatched: 0 },
+  runtimeConnections: {},
+  currentSession: null,
+  savedSessions: [],
+  recording: false,
+  buildSnapshots: [],
+  runtimeResolutions: {},
+  locatorResult: null,
   selectedNodeId: null,
   selectedDependencyId: null,
   hoveredNodeId: null,
   lineageNodes: [],
-  lineageEdges: [],
   activeFilter: 'all',
-  unifiedMode: false,
   realisticMode: false,
+  lightweightMode: (() => { try { return localStorage.getItem('grimoire-lightweight-map') === 'true'; } catch { return false; } })(),
   devToolsMode: false,
   diagnosticFilter: 'all',
   searchQuery: '',
@@ -84,8 +131,9 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
 
   setGraph: (graph) => {
     const current = get();
+    const changedProject = !current.graph || projectKey(current.graph) !== projectKey(graph);
     const nodes = (graph.nodes || []).map((node) => {
-      const previous = current.nodeMap.get(node.id);
+      const previous = changedProject ? undefined : current.nodeMap.get(node.id);
       const priorFindings = new Map(previous?.metrics.devTools?.findings?.map((finding) => [finding.id, finding]) || []);
       const devTools = node.metrics.devTools;
       return {
@@ -103,81 +151,179 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
     const mergedGraph = { ...graph, nodes };
     const nodeMap = new Map(nodes.map((n) => [n.id, n]));
     set({
-      graph: mergedGraph, nodes, nodeMap,
-      selectedNodeId: current.selectedNodeId && nodeMap.has(current.selectedNodeId) ? current.selectedNodeId : null,
-      selectedDependencyId: current.selectedDependencyId && graph.dependencies?.some((seal) => seal.id === current.selectedDependencyId) ? current.selectedDependencyId : null,
+      graph: mergedGraph, nodes, nodeMap, hotNodeCount: nodes.filter(isHotNode).length,
+      ...(changedProject ? { currentSession: null, savedSessions: readSavedSessions(projectKey(graph)), buildSnapshots: readBuildSnapshots(projectKey(graph)), recording: false,
+        runtimeResolutions: {}, runtimeConnections: {}, locatorResult: null, coverage: { received: 0, matched: 0, inferred: 0, ambiguous: 0, unmatched: 0 } } : {}),
+      selectedNodeId: !changedProject && current.selectedNodeId && nodeMap.has(current.selectedNodeId) ? current.selectedNodeId : null,
+      selectedDependencyId: !changedProject && current.selectedDependencyId && graph.dependencies?.some((seal) => seal.id === current.selectedDependencyId) ? current.selectedDependencyId : null,
     });
 
-    // Select Root node automatically on initial load
-    const rootNode = nodes.find(
-      (n) => n.name === 'App' || (n.cluster && n.cluster.includes('Root'))
-    );
-    if (rootNode && !current.graph && !current.selectedNodeId && !current.selectedDependencyId) {
-      get().selectNode(rootNode.id);
-    }
   },
 
-  recordTelemetry: (event) => {
-    if (event.type === 'LONG_TASK') {
-      const old = get().browserLongTasks;
-      set({ browserLongTasks: { count: old.count + 1, totalDurationMs: old.totalDurationMs + event.durationMs } });
-      return null;
-    }
-    const { nodes } = get();
-    const normalizedFile = normalizedSourceFile(event.file);
-    let matches = event.nodeId
-      ? nodes.filter((node) => node.id === event.nodeId)
-      : nodes.filter((node) => canonicalName(node.name) === canonicalName(event.componentName) && (!normalizedFile || normalizedFile.endsWith(node.file.replace(/\\/g, '/'))));
-    if (!event.nodeId && matches.length === 0 && normalizedFile) {
-      matches = nodes.filter((node) => node.kind === 'component' && normalizedFile.endsWith(node.file.replace(/\\/g, '/')));
-    }
-    if (matches.length !== 1) {
-      const previous = get().unmatchedRuntime;
-      if (event.type === 'RENDER') set({ unmatchedRuntime: { ...previous, renders: previous.renders + 1 }, recentRenders: [event, ...get().recentRenders].slice(0, 40) });
-      else if (event.type === 'DOM_UPDATE') set({ unmatchedRuntime: { ...previous, domUpdates: previous.domUpdates + 1 } });
-      return null;
-    }
-    const node = matches[0]!;
-    const old = node.telemetry;
-    const isRender = event.type === 'RENDER';
-    const phase = event.changeReasons?.[0];
-    const isUpdate = isRender && (phase === 'update' || phase === 'nested-update');
-    const isMount = isRender && phase === 'mount';
-    const count = (old?.renderCount || 0) + (isRender ? 1 : 0);
-    const updateCount = (old?.updateCount || 0) + (isUpdate ? 1 : 0);
-    const mountCount = (old?.mountCount || 0) + (isMount ? 1 : 0);
-    const domUpdateCount = (old?.domUpdateCount || 0) + (event.type === 'DOM_UPDATE' ? 1 : 0);
-    const average = isRender ? ((old?.avgRenderDurationMs || 0) * (count - 1) + event.durationMs) / count : old?.avgRenderDurationMs || 0;
-    const updateAverage = isUpdate ? ((old?.avgUpdateDurationMs || 0) * (updateCount - 1) + event.durationMs) / updateCount : old?.avgUpdateDurationMs || 0;
-    const updated = { ...node, telemetry: {
-      renderCount: count, updateCount, mountCount, lastRenderTime: event.timestamp,
-      domUpdateCount,
-      avgRenderDurationMs: average, avgUpdateDurationMs: updateAverage,
-      source: event.source,
-      lastReasons: event.changeReasons || [],
-      hierarchyPath: event.hierarchyPath,
-      parentComponentName: event.parentComponentName,
-      isOverheating: isUpdate ? updateCount >= 5 && updateAverage > 16 : old?.isOverheating,
-    } };
-    const changedIdentityProps = new Set((event.changeReasons || [])
-      .filter((reason) => /^prop:[^:]+:identity$/.test(reason))
-      .map((reason) => reason.split(':')[1]!));
-    const nextNodes = nodes.map((item) => {
-      if (item.id === node.id) return updated;
-      const devTools = item.metrics.devTools;
-      if (!isRender || (event.source !== 'adapter' && event.source !== 'fiber') || !changedIdentityProps.size || !devTools?.findings?.length) return item;
-      const findings = devTools.findings.map((finding) => {
-        if (finding.framework !== 'react' || !finding.propName || !finding.childName ||
-            !changedIdentityProps.has(finding.propName) || canonicalName(finding.childName) !== canonicalName(event.componentName)) return finding;
-        return { ...finding, evidence: 'runtime' as const, observedCount: (finding.observedCount || 0) + 1, lastObservedDurationMs: event.durationMs };
-      });
-      return findings.every((finding, index) => finding === devTools.findings?.[index])
-        ? item
-        : { ...item, metrics: { ...item.metrics, devTools: { ...devTools, findings } } };
+  recordTelemetry: (event) => get().recordTelemetryBatch([event])[0]?.nodeId || null,
+  recordTelemetryBatch: (events) => {
+    if (!events.length) return [];
+    const mapped: Array<{ event: DevToolsTelemetryEvent; nodeId: string }> = [];
+    set((state) => {
+      let changed = false;
+      let nodeMap = state.nodeMap;
+      let hotNodeCount = state.hotNodeCount;
+      let coverage = state.coverage;
+      let browserLongTasks = state.browserLongTasks;
+      let unmatchedRuntime = state.unmatchedRuntime;
+      let runtimeConnections = state.runtimeConnections;
+      let locatorResult = state.locatorResult;
+      const recent: GrimoireState['recentRenders'] = [];
+      const sessionEvents = state.recording && state.currentSession ? [...state.currentSession.events] : null;
+      let dropped = state.currentSession?.dropped || 0;
+      const putNode = (node: SealNode) => {
+        const previous = nodeMap.get(node.id);
+        hotNodeCount += Number(isHotNode(node)) - Number(previous ? isHotNode(previous) : false);
+        if (nodeMap === state.nodeMap) nodeMap = new Map(nodeMap);
+        nodeMap.set(node.id, node);
+      };
+
+      for (const event of events) {
+        if (event.type === 'HELLO') {
+          if (event.pageId) { runtimeConnections = { ...runtimeConnections, [event.pageId]: event }; changed = true; }
+          continue;
+        }
+        const match = event.type === 'RENDER' || event.type === 'DOM_UPDATE' || event.type === 'LOCATE'
+          ? matchTelemetry(state.graph, event, state.runtimeResolutions)
+          : { status: 'unmatched', candidates: [], explanation: 'not-a-component' } as EventMatch;
+
+        if (event.type === 'RENDER') {
+          coverage = { ...coverage, received: coverage.received + 1,
+            matched: coverage.matched + Number(match.status === 'exact'), inferred: coverage.inferred + Number(match.status === 'inferred'),
+            ambiguous: coverage.ambiguous + Number(match.status === 'ambiguous'), unmatched: coverage.unmatched + Number(match.status === 'unmatched') };
+          changed = true;
+        }
+        if (sessionEvents) {
+          if (sessionEvents.length < MAX_SESSION_EVENTS) sessionEvents.push({ id: crypto.randomUUID(), event, match });
+          else dropped++;
+          changed = true;
+        }
+        if (event.type === 'LOCATE') { locatorResult = { event, match }; changed = true; }
+        if (event.type === 'LONG_TASK') {
+          browserLongTasks = { count: browserLongTasks.count + 1, totalDurationMs: browserLongTasks.totalDurationMs + event.durationMs };
+          changed = true;
+          continue;
+        }
+        if (event.type !== 'RENDER' && event.type !== 'DOM_UPDATE' && event.type !== 'LOCATE') continue;
+        const node = match.nodeId ? nodeMap.get(match.nodeId) : undefined;
+        if (!node) {
+          if (event.type === 'RENDER') { unmatchedRuntime = { ...unmatchedRuntime, renders: unmatchedRuntime.renders + 1 }; recent.push(event); changed = true; }
+          else if (event.type === 'DOM_UPDATE') { unmatchedRuntime = { ...unmatchedRuntime, domUpdates: unmatchedRuntime.domUpdates + 1 }; changed = true; }
+          continue;
+        }
+        mapped.push({ event, nodeId: node.id });
+        if (event.type === 'LOCATE') continue;
+
+        const old = node.telemetry;
+        const isRender = event.type === 'RENDER';
+        const phase = event.changeReasons?.[0];
+        const isUpdate = isRender && (phase === 'update' || phase === 'nested-update');
+        const isMount = isRender && phase === 'mount';
+        const count = (old?.renderCount || 0) + Number(isRender);
+        const updateCount = (old?.updateCount || 0) + Number(isUpdate);
+        const mountCount = (old?.mountCount || 0) + Number(isMount);
+        const domUpdateCount = (old?.domUpdateCount || 0) + Number(event.type === 'DOM_UPDATE');
+        const average = isRender ? ((old?.avgRenderDurationMs || 0) * (count - 1) + event.durationMs) / count : old?.avgRenderDurationMs || 0;
+        const updateAverage = isUpdate ? ((old?.avgUpdateDurationMs || 0) * (updateCount - 1) + event.durationMs) / updateCount : old?.avgUpdateDurationMs || 0;
+        putNode({ ...node, telemetry: {
+          renderCount: count, updateCount, mountCount, lastRenderTime: event.timestamp, domUpdateCount,
+          avgRenderDurationMs: average, avgUpdateDurationMs: updateAverage, source: event.source,
+          lastReasons: event.changeReasons || [], hierarchyPath: event.hierarchyPath, parentComponentName: event.parentComponentName,
+          isOverheating: isUpdate ? updateCount >= 5 && updateAverage > 16 : old?.isOverheating,
+        } });
+        changed = true;
+        if (isRender) recent.push({ ...event, mappedNodeId: node.id });
+
+        if (!isRender || (event.source !== 'adapter' && event.source !== 'fiber')) continue;
+        const changedIdentityProps = new Set((event.changeReasons || [])
+          .filter((reason) => /^prop:[^:]+:identity$/.test(reason)).map((reason) => reason.split(':')[1]!));
+        if (!changedIdentityProps.size) continue;
+        const candidateIds = new Set<string>();
+        const index = findingIndex(state.graph);
+        for (const prop of changedIdentityProps) for (const id of index.get(`${canonicalName(event.componentName)}:${prop}`) || []) candidateIds.add(id);
+        for (const id of candidateIds) {
+          const item = nodeMap.get(id);
+          if (!item) continue;
+          const devTools = item.metrics.devTools;
+          if (item.id === node.id || !devTools?.findings?.length) continue;
+          const findings = devTools.findings.map((finding) => {
+            if (finding.framework !== 'react' || !finding.propName || !finding.childName ||
+                !changedIdentityProps.has(finding.propName) || canonicalName(finding.childName) !== canonicalName(event.componentName)) return finding;
+            return { ...finding, evidence: 'runtime' as const, observedCount: (finding.observedCount || 0) + 1, lastObservedDurationMs: event.durationMs };
+          });
+          if (findings.some((finding, index) => finding !== devTools.findings?.[index])) {
+            putNode({ ...item, metrics: { ...item.metrics, devTools: { ...devTools, findings } } });
+          }
+        }
+      }
+      if (!changed) return state;
+      return {
+        coverage, browserLongTasks, unmatchedRuntime, runtimeConnections, locatorResult,
+        currentSession: sessionEvents && state.currentSession ? { ...state.currentSession, events: sessionEvents, dropped } : state.currentSession,
+        recentRenders: recent.length ? [...recent.reverse(), ...state.recentRenders].slice(0, 40) : state.recentRenders,
+        ...(nodeMap !== state.nodeMap ? { nodeMap, nodes: state.nodes.map((node) => nodeMap.get(node.id) || node),
+          hotNodeCount } : {}),
+      };
     });
-    set({ nodes: nextNodes, nodeMap: new Map(nextNodes.map((item) => [item.id, item])),
-      recentRenders: isRender ? [{ ...event, mappedNodeId: node.id }, ...get().recentRenders].slice(0, 40) : get().recentRenders });
-    return node.id;
+    return mapped;
+  },
+
+  startRecording: () => {
+    const key = projectKey(get().graph);
+    set({ recording: true, currentSession: { version: 1, id: crypto.randomUUID(), projectKey: key,
+      name: new Date().toLocaleString(), startedAt: Date.now(), dropped: 0, events: [] } });
+  },
+  stopRecording: () => {
+    const current = get().currentSession;
+    if (!current || !get().recording) return;
+    const finished = { ...current, stoppedAt: Date.now() };
+    const savedSessions = [finished, ...get().savedSessions.filter((session) => session.id !== finished.id)].slice(0, MAX_SAVED_SESSIONS);
+    persistSessions(finished.projectKey, savedSessions);
+    set({ recording: false, currentSession: finished, savedSessions });
+  },
+  clearRecording: () => set({ recording: false, currentSession: null }),
+  importSession: (value) => {
+    const key = projectKey(get().graph);
+    if (!validSession(value, key)) return false;
+    const savedSessions = [value, ...get().savedSessions.filter((session) => session.id !== value.id)].slice(0, MAX_SAVED_SESSIONS);
+    persistSessions(key, savedSessions);
+    set({ savedSessions });
+    return true;
+  },
+  resolveRuntime: (runtimeId, nodeId) => {
+    const graph = get().graph;
+    if (!graph || (nodeId && !graph.nodes.some((node) => node.id === nodeId))) return;
+    const runtimeResolutions = { ...get().runtimeResolutions };
+    if (nodeId) runtimeResolutions[runtimeId] = nodeId;
+    else delete runtimeResolutions[runtimeId];
+    const remap = (entry: RecordedEvent): RecordedEvent => entry.event.runtimeId && `${entry.event.pageId || 'page'}:${entry.event.runtimeId}` === runtimeId
+      ? { ...entry, match: matchTelemetry(graph, entry.event, runtimeResolutions) } : entry;
+    const currentSession = get().currentSession;
+    const savedSessions = get().savedSessions.map((session) => ({ ...session, events: session.events.map(remap) }));
+    persistSessions(projectKey(graph), savedSessions);
+    set({ runtimeResolutions, savedSessions, currentSession: currentSession ? { ...currentSession, events: currentSession.events.map(remap) } : null });
+  },
+  resolveRecordedEvent: (eventId, nodeId) => {
+    if (nodeId && !get().nodeMap.has(nodeId)) return;
+    const remap = (entry: RecordedEvent): RecordedEvent => entry.id === eventId
+      ? { ...entry, match: nodeId ? { status: 'exact', nodeId, candidates: [nodeId], explanation: 'manual' }
+        : matchTelemetry(get().graph, entry.event, get().runtimeResolutions) } : entry;
+    const currentSession = get().currentSession;
+    const savedSessions = get().savedSessions.map((session) => ({ ...session, events: session.events.map(remap) }));
+    persistSessions(projectKey(get().graph), savedSessions);
+    set({ savedSessions, currentSession: currentSession ? { ...currentSession, events: currentSession.events.map(remap) } : null });
+  },
+  saveBuildSnapshot: (graph) => {
+    const snapshot = buildSnapshot(graph);
+    if (!Object.keys(snapshot.packages).length || get().buildSnapshots.some((item) => item.measuredAt === snapshot.measuredAt)) return;
+    const buildSnapshots = [snapshot, ...get().buildSnapshots].slice(0, 5);
+    persistBuildSnapshots(snapshot.projectKey, buildSnapshots);
+    set({ buildSnapshots });
   },
 
   selectNode: (nodeId) => {
@@ -187,7 +333,6 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
         selectedDependencyId: null,
         isDrawerOpen: false,
         lineageNodes: [],
-        lineageEdges: [],
       });
       return;
     }
@@ -203,15 +348,14 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
     );
 
     const lineageNodes: string[] = [];
-    const lineageEdges: string[] = [];
 
     if (rootNode && rootNode.id !== targetNode.id && graph) {
       // Find shortest path from root to targetNode via BFS
-      const queue: Array<{ id: string; path: string[]; edgePath: string[] }> = [
-        { id: rootNode.id, path: [rootNode.id], edgePath: [] },
+      const queue: Array<{ id: string; path: string[] }> = [
+        { id: rootNode.id, path: [rootNode.id] },
       ];
       const visited = new Set<string>([rootNode.id]);
-      let foundPath: { path: string[]; edgePath: string[] } | null = null;
+      let foundPath: { path: string[] } | null = null;
 
       while (queue.length > 0) {
         const curr = queue.shift()!;
@@ -227,11 +371,9 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
         for (const edge of outgoing) {
           if (!visited.has(edge.target)) {
             visited.add(edge.target);
-            const edgeKey = `${edge.source}->${edge.target}`;
             queue.push({
               id: edge.target,
               path: [...curr.path, edge.target],
-              edgePath: [...curr.edgePath, edgeKey],
             });
           }
         }
@@ -239,7 +381,6 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
 
       if (foundPath) {
         lineageNodes.push(...foundPath.path);
-        lineageEdges.push(...foundPath.edgePath);
       } else {
         lineageNodes.push(targetNode.id);
       }
@@ -252,7 +393,6 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
       selectedDependencyId: null,
       isDrawerOpen: true,
       lineageNodes,
-      lineageEdges,
     });
   },
 
@@ -261,7 +401,6 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
     selectedNodeId: null,
     isDrawerOpen: Boolean(dependencyId),
     lineageNodes: [],
-    lineageEdges: [],
   }),
 
   hoverNode: (nodeId, clientX, clientY) => {
@@ -296,12 +435,15 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
 
   setFilter: (activeFilter) => set({ activeFilter }),
   setDiagnosticFilter: (diagnosticFilter) => set({ diagnosticFilter }),
-  toggleUnified: () => set((s) => ({ unifiedMode: !s.unifiedMode, devToolsMode: false })),
   toggleRealistic: () => set((s) => ({ realisticMode: !s.realisticMode, devToolsMode: false })),
+  toggleLightweight: () => set((s) => {
+    const lightweightMode = !s.lightweightMode;
+    try { localStorage.setItem('grimoire-lightweight-map', String(lightweightMode)); } catch { /* No storage. */ }
+    return { lightweightMode };
+  }),
   toggleDevTools: () =>
     set((s) => ({
       devToolsMode: !s.devToolsMode,
-      unifiedMode: false,
       realisticMode: false,
       diagnosticFilter: 'all',
     })),

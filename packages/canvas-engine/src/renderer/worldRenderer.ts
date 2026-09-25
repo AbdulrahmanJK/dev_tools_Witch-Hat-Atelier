@@ -4,12 +4,12 @@ import type {
   DiagnosticFilter,
   DevToolsTelemetryEvent,
   GrimoireGraph,
-  MandalaSector,
   SealEdge,
   SealNode,
 } from '@wha/core';
 import type { Camera, ViewportBounds } from '../camera/camera.js';
-import { GlyphRenderer } from '../glyphs/glyphRenderer.js';
+import { GlyphRenderer, WHA_THEMES } from '../glyphs/glyphRenderer.js';
+import { appendSealShape } from '../glyphs/sealShape.js';
 import { PulseManager } from '../telemetry/pulseManager.js';
 import { InkFlameRenderer } from '../telemetry/inkFlameRenderer.js';
 import type { VFXEngine } from '../vfx/vfxEngine.js';
@@ -30,21 +30,25 @@ export class WorldRenderer {
   public dependencies: DependencySeal[] = [];
   public selectedDependencyId: string | null = null;
   public nodeMap = new Map<string, SealNode>();
-  public mandalaSectors: MandalaSector[] = [];
-  public rootRadius = 1140;
 
   public selectedNodeId: string | null = null;
   public hoveredNodeId: string | null = null;
   public lineageNodeIds = new Set<string>();
-  public lineageEdgeKeys = new Set<string>();
-
-  public unifiedMode = false;
   public realisticMode = false;
+  public lightweightMode = false;
   public devToolsMode = false;
   public activeFilter = 'all';
   public diagnosticFilter: DiagnosticFilter = 'all';
 
-  private sortedUnifiedNodes: SealNode[] = [];
+  private readonly spatialCell = 512;
+  private ordinaryIndex = new Map<string, SealNode[]>();
+  private edgeAdjacency = new Map<string, SealEdge[]>();
+  private lightweightEdges: SealEdge[] = [];
+  private maxNodeRadius = 120;
+  private ordinaryOrder = new Map<string, number>();
+  private farCacheCanvas: HTMLCanvasElement | null = null;
+  private farCacheKey = '';
+  private telemetryVersion = 0;
   private pulseOffset = 0;
   private auraDashOffset = 0;
 
@@ -58,13 +62,12 @@ export class WorldRenderer {
   }
 
   public setData(data: GrimoireGraph): void {
+    this.farCacheKey = '';
     this.nodes = data.nodes || [];
     this.edges = data.edges || [];
     this.clusters = data.clusters || [];
     this.dependencies = data.dependencies || [];
     this.nodeMap = new Map(this.nodes.map((n) => [n.id, n]));
-    this.mandalaSectors = data.unifiedLayout?.mandalaSectors || [];
-    this.rootRadius = data.unifiedLayout?.rootRadius || 1140;
 
     // Pre-calculate edge keys for zero runtime allocations
     this.edges.forEach((e) => {
@@ -72,18 +75,37 @@ export class WorldRenderer {
       e._key2 = `${e.target}->${e.source}`;
     });
 
-    // Pre-sort nodes for unified mode descending by radius
-    this.sortedUnifiedNodes = [...this.nodes].sort((a, b) => (b.unifiedR || 0) - (a.unifiedR || 0));
+    this.ordinaryOrder = new Map(this.nodes.map((node, index) => [node.id, index]));
+    this.ordinaryIndex = this.buildSpatialIndex();
+    this.maxNodeRadius = this.nodes.reduce((max, node) => Math.max(max, node.metrics.radius + 4), 120);
+    this.edgeAdjacency = new Map();
+    this.lightweightEdges = [];
+    for (const edge of this.edges) {
+      const source = this.nodeMap.get(edge.source);
+      const target = this.nodeMap.get(edge.target);
+      if (source && target && (source.cluster !== target.cluster || source.isSharedHub || target.isSharedHub || edge.isCircular || edge.isArchitectureViolation)) {
+        this.lightweightEdges.push(edge);
+      }
+      for (const id of [edge.source, edge.target]) {
+        const list = this.edgeAdjacency.get(id) || [];
+        list.push(edge);
+        this.edgeAdjacency.set(id, list);
+      }
+    }
+  }
+
+  private buildSpatialIndex(): Map<string, SealNode[]> {
+    const index = new Map<string, SealNode[]>();
+    for (const node of this.nodes) {
+      const key = `${Math.floor(node.x / this.spatialCell)}:${Math.floor(node.y / this.spatialCell)}`;
+      const cell = index.get(key) || [];
+      cell.push(node);
+      index.set(key, cell);
+    }
+    return index;
   }
 
   public getNodePos(node: SealNode): { x: number; y: number; r: number } {
-    if (this.unifiedMode) {
-      return {
-        x: node.unifiedX || 0,
-        y: node.unifiedY || 0,
-        r: node.unifiedR || node.metrics.radius,
-      };
-    }
     return {
       x: node.x,
       y: node.y,
@@ -93,27 +115,55 @@ export class WorldRenderer {
 
   public setSelectedNode(
     nodeId: string | null,
-    lineageNodes: string[] = [],
-    lineageEdges: string[] = []
+    lineageNodes: string[] = []
   ): void {
     this.selectedNodeId = nodeId;
     this.lineageNodeIds = new Set(lineageNodes);
-    this.lineageEdgeKeys = new Set(lineageEdges);
   }
 
   public setHoveredNode(nodeId: string | null): void {
     this.hoveredNodeId = nodeId;
   }
 
+  public hoverAffectsRender(): boolean {
+    return this.usesFarNodeMarkers() || (!this.realisticMode && !this.selectedNodeId);
+  }
+
+  /** Query spatial cells while preserving the original paint order. */
+  private visibleNodes(vp: ViewportBounds, marginFactor = 1): SealNode[] {
+    const list = this.nodes;
+    if (list.length <= 800) return list;
+    const index = this.ordinaryIndex;
+    const order = this.ordinaryOrder;
+    const margin = this.maxNodeRadius * marginFactor + 30;
+    const x1 = Math.floor((vp.x1 - margin) / this.spatialCell);
+    const x2 = Math.floor((vp.x2 + margin) / this.spatialCell);
+    const y1 = Math.floor((vp.y1 - margin) / this.spatialCell);
+    const y2 = Math.floor((vp.y2 + margin) / this.spatialCell);
+    if ((x2 - x1 + 1) * (y2 - y1 + 1) > index.size * 2) return list;
+    const visible: SealNode[] = [];
+    for (let x = x1; x <= x2; x++) for (let y = y1; y <= y2; y++) {
+      const cell = index.get(`${x}:${y}`);
+      if (cell) visible.push(...cell);
+    }
+    if (visible.length > list.length * 0.7) return list;
+    visible.sort((a, b) => (order.get(a.id) || 0) - (order.get(b.id) || 0));
+    return visible;
+  }
+
   public setModes(options: {
-    unifiedMode?: boolean;
     realisticMode?: boolean;
+    lightweightMode?: boolean;
     activeFilter?: string;
     devToolsMode?: boolean;
     diagnosticFilter?: DiagnosticFilter;
   }): void {
-    if (options.unifiedMode !== undefined) this.unifiedMode = options.unifiedMode;
     if (options.realisticMode !== undefined) this.realisticMode = options.realisticMode;
+    if (options.lightweightMode !== undefined && options.lightweightMode !== this.lightweightMode) {
+      this.lightweightMode = options.lightweightMode;
+      this.farCacheKey = '';
+      if (this.lightweightMode) this.pulseManager.clear();
+    }
     if (options.activeFilter !== undefined) this.activeFilter = options.activeFilter;
     if (options.devToolsMode !== undefined) this.devToolsMode = options.devToolsMode;
     if (options.diagnosticFilter !== undefined) this.diagnosticFilter = options.diagnosticFilter;
@@ -124,30 +174,68 @@ export class WorldRenderer {
   }
 
   public triggerDevToolsPulse(nodeId: string, event: DevToolsTelemetryEvent): void {
-    this.pulseManager.triggerPulse(nodeId, event);
+    this.telemetryVersion++;
+    if (!this.lightweightMode) this.pulseManager.triggerPulse(nodeId, event);
   }
 
   public hitTestNode(worldX: number, worldY: number): SealNode | null {
-    // Check in reverse order so topmost drawn nodes are clicked first
-    const list = this.unifiedMode
-      ? [...(this.sortedUnifiedNodes || this.nodes)].reverse()
-      : [...this.nodes].reverse();
+    return this.hitTestNodeCandidates(worldX, worldY, 1)[0] || null;
+  }
 
-    for (const node of list) {
-      if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) {
-        continue;
-      }
-      const pos = this.getNodePos(node);
-      const dist = Math.hypot(worldX - pos.x, worldY - pos.y);
-      if (dist <= pos.r + 4) {
-        return node;
+  public hitTestNodeCandidates(worldX: number, worldY: number, limit = 8): SealNode[] {
+    const index = this.ordinaryIndex;
+    const markerReach = this.usesFarNodeMarkers() ? 5 / this.camera.zoom : 0;
+    const reach = Math.max(this.maxNodeRadius, markerReach);
+    const minX = Math.floor((worldX - reach) / this.spatialCell);
+    const maxX = Math.floor((worldX + reach) / this.spatialCell);
+    const minY = Math.floor((worldY - reach) / this.spatialCell);
+    const maxY = Math.floor((worldY + reach) / this.spatialCell);
+    const matches: Array<{ node: SealNode; distance: number }> = [];
+    const compare = (a: { node: SealNode; distance: number }, b: { node: SealNode; distance: number }) => a.distance - b.distance || Number(b.node.id === this.selectedNodeId) - Number(a.node.id === this.selectedNodeId);
+    const consider = (node: SealNode) => {
+        if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) return;
+        const pos = this.getNodePos(node);
+        const dx = worldX - pos.x;
+        const dy = worldY - pos.y;
+        const radius = Math.max(pos.r + 4, markerReach);
+        const distance = dx * dx + dy * dy;
+        if (distance > radius * radius) return;
+        const item = { node, distance };
+        if (matches.length === limit && compare(item, matches[matches.length - 1]!) >= 0) return;
+        let position = matches.length;
+        while (position > 0 && compare(item, matches[position - 1]!) < 0) position--;
+        matches.splice(position, 0, item);
+        if (matches.length > limit) matches.pop();
+    };
+    const cellCount = (maxX - minX + 1) * (maxY - minY + 1);
+    if (cellCount > index.size * 2) {
+      for (const node of this.nodes) consider(node);
+    } else {
+      for (let cx = minX; cx <= maxX; cx++) for (let cy = minY; cy <= maxY; cy++) {
+        for (const node of index.get(`${cx}:${cy}`) || []) consider(node);
       }
     }
-    return null;
+    return matches.map((item) => item.node);
   }
 
   public hitTestDependency(worldX: number, worldY: number): DependencySeal | null {
-    return this.dependencies.find((seal) => Math.hypot(worldX - seal.x, worldY - seal.y) <= seal.radius + 6) || null;
+    return this.dependencies.find((seal) => {
+      const dx = worldX - seal.x;
+      const dy = worldY - seal.y;
+      const radius = this.usesFarNodeMarkers() ? Math.max(seal.radius + 6, 8 / this.camera.zoom) : seal.radius + 6;
+      return Math.abs(dx) <= radius && Math.abs(dy) <= radius && dx * dx + dy * dy <= radius * radius;
+    }) || null;
+  }
+
+  /** WebGL fire can advance while the architecture canvas stays unchanged. */
+  public canRenderEffectsOnly(): boolean {
+    return !this.camera.animating && !this.lightweightMode && !this.realisticMode &&
+      !this.usesFarNodeMarkers() && !this.selectedNodeId && !this.pulseManager.hasQueuedPulses();
+  }
+
+  public renderEffectsOnly(time = performance.now()): { hasActiveAnimation: boolean } {
+    const active = this.renderVFX(this.camera.getViewportBounds(), this.usesFarNodeMarkers(), time / 1000);
+    return { hasActiveAnimation: active };
   }
 
   public render(time = performance.now()): { hasActiveAnimation: boolean } {
@@ -156,8 +244,8 @@ export class WorldRenderer {
     const dpr = cam.dpr;
 
     const nowSec = time / 1000;
-    this.pulseOffset = (nowSec * 24) % 12;
-    this.auraDashOffset = -((nowSec * 15) % 10);
+    this.pulseOffset = this.lightweightMode ? 0 : (nowSec * 24) % 12;
+    this.auraDashOffset = this.lightweightMode ? 0 : -((nowSec * 15) % 10);
     this.glyphRenderer.setAuraDashOffset(this.auraDashOffset);
 
     ctx.save();
@@ -171,29 +259,26 @@ export class WorldRenderer {
       ctx.fillRect(0, 0, cam.width, cam.height);
     }
 
-    // Apply Camera Transform
-    ctx.save();
-    ctx.translate(cam.width / 2, cam.height / 2);
-    ctx.scale(cam.zoom, cam.zoom);
-    ctx.translate(-cam.x, -cam.y);
-
     const vp = cam.getViewportBounds();
     const lod = cam.getLOD();
-
-    if (this.unifiedMode) {
-      this.drawUnifiedMandalaBackdrop(ctx, vp, lod);
-    } else {
+    const farNodeMarkers = this.usesFarNodeMarkers();
+    // Every component stays on the map. At very small scales only its mark is
+    // simplified; archipelagos never replace the individual nodes.
+    if (farNodeMarkers) this.drawCachedFarMap(ctx, vp, lod);
+    else {
+      ctx.save();
+      ctx.translate(cam.width / 2, cam.height / 2);
+      ctx.scale(cam.zoom, cam.zoom);
+      ctx.translate(-cam.x, -cam.y);
       this.drawClustersBackdrop(ctx, vp, lod);
+      this.drawEdges(ctx, vp, lod);
+      this.drawNodes(ctx, vp, lod);
+      this.drawDependencies(ctx, vp);
+      ctx.restore();
     }
 
-    this.drawEdges(ctx, vp, lod);
-    this.drawNodes(ctx, vp, lod);
-    this.drawDependencies(ctx, vp);
-
-    ctx.restore(); // Keep device-pixel scaling, but return to screen coordinates.
-
     // Screen-space pulses stay legible when the architecture is zoomed far out.
-    this.pulseManager.drawPulses(
+    if (!this.lightweightMode) this.pulseManager.drawPulses(
       ctx,
       (nodeId) => {
         const node = this.nodeMap.get(nodeId);
@@ -207,16 +292,30 @@ export class WorldRenderer {
 
     ctx.restore();
 
-    // 2. Dispatch GPU WebGL VFX items
+    const vfxActive = this.renderVFX(vp, farNodeMarkers, nowSec);
+
+    // Determine if next frame should be scheduled
+    const hasActiveAnimation =
+      cam.animating ||
+      (!this.lightweightMode && !farNodeMarkers && !this.realisticMode && !!this.selectedNodeId) ||
+      (!this.lightweightMode && this.devToolsMode && !this.realisticMode && vfxActive) ||
+      (!this.lightweightMode && this.pulseManager.hasActivePulses(time));
+
+    return { hasActiveAnimation };
+  }
+
+  private renderVFX(vp: ViewportBounds, farNodeMarkers: boolean, nowSec: number): boolean {
+    // Dispatch GPU WebGL VFX items independently of the static map.
     const vfxItems: VFXItem[] = [];
     const allowFlame =
       this.devToolsMode &&
       !this.realisticMode &&
+      !this.lightweightMode &&
       (this.diagnosticFilter === 'all' || this.diagnosticFilter === 'hot');
 
-    if (allowFlame) {
+    if (allowFlame && !farNodeMarkers) {
       const activeNodeId = this.selectedNodeId || this.hoveredNodeId;
-      const list = this.unifiedMode ? this.sortedUnifiedNodes : this.nodes;
+      const list = this.visibleNodes(vp, 1.35);
 
       for (const node of list) {
         if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) continue;
@@ -268,22 +367,99 @@ export class WorldRenderer {
     const vfxRes = this.vfxEngine
       ? this.vfxEngine.render(this.camera, vfxItems, nowSec)
       : { hasActiveAnimation: false };
+    return vfxRes.hasActiveAnimation;
+  }
 
-    // Determine if next frame should be scheduled
-    const hasActiveAnimation =
-      cam.animating ||
-      (!this.realisticMode && !!this.selectedNodeId) ||
-      (this.devToolsMode && !this.realisticMode && vfxRes.hasActiveAnimation) ||
-      this.pulseManager.hasActivePulses(time);
+  private usesFarNodeMarkers(): boolean {
+    return this.nodes.length > 1500 && this.camera.zoom < 0.07;
+  }
 
-    return { hasActiveAnimation };
+  private drawCachedFarMap(ctx: CanvasRenderingContext2D, vp: ViewportBounds, lod: 0 | 1 | 2): void {
+    const cam = this.camera;
+    if (!this.farCacheCanvas) this.farCacheCanvas = document.createElement('canvas');
+    const cache = this.farCacheCanvas;
+    const key = [cam.x, cam.y, cam.zoom, cam.width, cam.height, cam.dpr, this.realisticMode,
+      this.devToolsMode, this.lightweightMode, this.activeFilter, this.diagnosticFilter, this.selectedNodeId, this.hoveredNodeId,
+      this.selectedDependencyId, this.telemetryVersion].join('|');
+    if (cache.width !== this.canvas.width || cache.height !== this.canvas.height || key !== this.farCacheKey) {
+      cache.width = this.canvas.width;
+      cache.height = this.canvas.height;
+      const cached = cache.getContext('2d');
+      if (!cached) return;
+      cached.scale(cam.dpr, cam.dpr);
+      cached.translate(cam.width / 2, cam.height / 2);
+      cached.scale(cam.zoom, cam.zoom);
+      cached.translate(-cam.x, -cam.y);
+      this.drawClustersBackdrop(cached, vp, lod);
+      this.drawEdges(cached, vp, lod);
+      this.drawFarNodeMarkers(cached, vp);
+      this.drawDependencies(cached, vp);
+      this.farCacheKey = key;
+    }
+    ctx.drawImage(cache, 0, 0, cam.width, cam.height);
+  }
+
+  private drawFarNodeMarkers(ctx: CanvasRenderingContext2D, vp: ViewportBounds): void {
+    const zoom = this.camera.zoom;
+    const groups = new Map<string, Path2D>();
+    const selected = new Path2D();
+    const hot = new Path2D();
+    const list = this.nodes;
+    for (const node of list) {
+      if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) continue;
+      const pos = this.getNodePos(node);
+      if (pos.x < vp.x1 || pos.x > vp.x2 || pos.y < vp.y1 || pos.y > vp.y2) continue;
+      const radius = Math.max(3, Math.min(5, pos.r * zoom)) / zoom;
+      const isHot = node.telemetry?.isOverheating || ['overcharged', 'fissure'].includes(node.metrics?.devTools?.overloadState || '');
+      const dim = this.devToolsMode && this.diagnosticFilter !== 'all' && (
+        (this.diagnosticFilter === 'hot' && !isHot) ||
+        (this.diagnosticFilter === 'cycles' && !node.isCircular) ||
+        (this.diagnosticFilter === 'orphans' && !node.isOrphan) ||
+        (this.diagnosticFilter === 'pact' && !node.architectureViolationIds?.length)
+      );
+      const key = `${this.realisticMode ? 'Ink' : node.metrics?.element || 'Arcane'}:${dim ? 'dim' : 'normal'}`;
+      let path = groups.get(key);
+      if (!path) { path = new Path2D(); groups.set(key, path); }
+      appendSealShape(path, node.kind, pos.x, pos.y, radius);
+      if (node.id === this.selectedNodeId || node.id === this.hoveredNodeId) {
+        selected.moveTo(pos.x + radius + 2 / zoom, pos.y);
+        selected.arc(pos.x, pos.y, radius + 2 / zoom, 0, Math.PI * 2);
+      }
+      if (this.devToolsMode && isHot && !dim) {
+        hot.moveTo(pos.x + radius + 1.5 / zoom, pos.y);
+        hot.arc(pos.x, pos.y, radius + 1.5 / zoom, 0, Math.PI * 2);
+      }
+    }
+    ctx.save();
+    for (const [key, path] of groups) {
+      const [element, tone] = key.split(':');
+      ctx.globalAlpha = tone === 'dim' ? 0.16 : 0.82;
+      ctx.fillStyle = WHA_THEMES[element || 'Arcane']?.stroke || WHA_THEMES.Arcane!.stroke;
+      ctx.fill(path);
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1.4 / zoom;
+    ctx.strokeStyle = '#d43827';
+    ctx.stroke(hot);
+    ctx.lineWidth = 2 / zoom;
+    ctx.strokeStyle = '#c48b26';
+    ctx.stroke(selected);
+    ctx.restore();
   }
 
   private drawDependencies(ctx: CanvasRenderingContext2D, vp: ViewportBounds): void {
     const active = this.selectedDependencyId;
+    const far = this.usesFarNodeMarkers();
     for (const seal of this.dependencies) {
       if (seal.x + seal.radius < vp.x1 || seal.x - seal.radius > vp.x2 || seal.y + seal.radius < vp.y1 || seal.y - seal.radius > vp.y2) continue;
       const selected = active === seal.id;
+      if (far) {
+        ctx.beginPath();
+        ctx.arc(seal.x, seal.y, (selected ? 5 : 2.6) / this.camera.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = seal.build?.emittedBytesEstimate && seal.build.emittedBytesEstimate > 100 * 1024 ? '#b54631' : '#806a9b';
+        ctx.fill();
+        continue;
+      }
       ctx.save();
       if (selected) {
         ctx.strokeStyle = 'rgba(138, 97, 38, 0.28)';
@@ -409,71 +585,6 @@ export class WorldRenderer {
     }
   }
 
-  private drawUnifiedMandalaBackdrop(
-    ctx: CanvasRenderingContext2D,
-    _vp: ViewportBounds,
-    lod: 0 | 1 | 2
-  ): void {
-    ctx.save();
-    ctx.translate(0, 0);
-
-    const R = this.rootRadius;
-
-    // Master Outer Circle
-    ctx.beginPath();
-    ctx.arc(0, 0, R, 0, Math.PI * 2);
-    ctx.strokeStyle = '#141311';
-    ctx.lineWidth = 4.0;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(0, 0, R * 0.985, 0, Math.PI * 2);
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(0, 0, R * 0.97, 0, Math.PI * 2);
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-
-    // Sacred Sector Mandala Slices
-    this.mandalaSectors.forEach((sec) => {
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, R, sec.angleStart, sec.angleEnd);
-      ctx.closePath();
-      ctx.strokeStyle = '#141311';
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, R, sec.angleStart, sec.angleEnd);
-      ctx.closePath();
-      ctx.fillStyle = sec.color;
-      ctx.globalAlpha = 0.025;
-      ctx.fill();
-      ctx.globalAlpha = 1.0;
-
-      if (lod >= 1) {
-        const midAngle = (sec.angleStart + sec.angleEnd) / 2;
-        const textDist = R + 42;
-        const tx = Math.cos(midAngle) * textDist;
-        const ty = Math.sin(midAngle) * textDist;
-
-        ctx.save();
-        ctx.translate(tx, ty);
-        ctx.font = 'bold 14px Palatino, Georgia, serif';
-        ctx.fillStyle = sec.color;
-        ctx.textAlign = 'center';
-        ctx.fillText(`✦ ${sec.label} ✦`, 0, 0);
-        ctx.restore();
-      }
-    });
-
-    ctx.restore();
-  }
-
   /**
    * Draw ink connection lines with smart LOD filtering to prevent visual clutter
    */
@@ -483,15 +594,19 @@ export class WorldRenderer {
     const activeNodeId = this.selectedNodeId || this.hoveredNodeId;
     const pulseOffset = this.pulseOffset;
     const isZoomedFarOut = this.camera.zoom < 0.32;
+    const farNodeMarkers = this.usesFarNodeMarkers();
 
-    for (const edge of this.edges) {
+    const edges = farNodeMarkers ? activeNodeId ? this.edgeAdjacency.get(activeNodeId) || [] : []
+      : this.lightweightMode ? activeNodeId ? this.edgeAdjacency.get(activeNodeId) || [] : this.lightweightEdges
+      : this.edges;
+    for (const edge of edges) {
       const s = this.nodeMap.get(edge.source);
       const t = this.nodeMap.get(edge.target);
       if (!s || !t) continue;
 
       // Smart LOD: When zoomed far out and no node is actively inspected,
       // filter out noisy internal button/icon micro-links, keeping major structural arteries clear!
-      if (isZoomedFarOut && !activeNodeId && !this.unifiedMode) {
+      if (isZoomedFarOut && !activeNodeId) {
         const isInterCluster = s.cluster !== t.cluster;
         const isCoreEdge =
           s.cluster?.includes('Core') ||
@@ -515,18 +630,11 @@ export class WorldRenderer {
         continue;
       }
 
-      const isLineageEdge =
-        this.unifiedMode &&
-        this.lineageEdgeKeys &&
-        (this.lineageEdgeKeys.has(edge._key1 || '') || this.lineageEdgeKeys.has(edge._key2 || ''));
-
       const isConnectedToActive =
-        !this.unifiedMode &&
         !!activeNodeId &&
         (edge.source === activeNodeId || edge.target === activeNodeId);
 
       const isDimmed =
-        !this.unifiedMode &&
         !!activeNodeId &&
         edge.source !== activeNodeId &&
         edge.target !== activeNodeId;
@@ -546,12 +654,24 @@ export class WorldRenderer {
 
       ctx.save();
 
+      if (this.lightweightMode) {
+        const active = edge.source === activeNodeId || edge.target === activeNodeId;
+        ctx.strokeStyle = edge.isArchitectureViolation ? '#b83a14' : edge.isCircular ? '#a82adb' : active ? '#a46d20' : 'rgba(83, 65, 42, 0.20)';
+        ctx.lineWidth = active ? 1.7 : edge.isCircular || edge.isArchitectureViolation ? 1.25 : 0.75;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        ctx.restore();
+        continue;
+      }
+
       if (this.devToolsMode && edge.isArchitectureViolation) {
         ctx.strokeStyle = '#b83a14';
         ctx.lineWidth = isPactFilter ? 3.2 : 2.2;
         ctx.setLineDash([3, 4]);
         ctx.globalAlpha = 1;
-      } else if (isLineageEdge || isConnectedToActive) {
+      } else if (isConnectedToActive) {
         // Active flowing golden / fiery ink thread
         ctx.strokeStyle = isHotConnectedEdge ? '#d43827' : isCircularLoop ? '#a82adb' : '#c48b26';
         ctx.lineWidth = 2.4;
@@ -598,14 +718,14 @@ export class WorldRenderer {
     const activeNodeId = isArt ? null : this.selectedNodeId || this.hoveredNodeId;
 
     const connectedNodeIds = new Set<string>();
-    if (activeNodeId && !this.unifiedMode) {
-      for (const e of this.edges) {
+    if (activeNodeId) {
+      for (const e of this.edgeAdjacency.get(activeNodeId) || []) {
         if (e.source === activeNodeId) connectedNodeIds.add(e.target);
         if (e.target === activeNodeId) connectedNodeIds.add(e.source);
       }
     }
 
-    const renderList = this.unifiedMode ? this.sortedUnifiedNodes : this.nodes;
+    const renderList = this.visibleNodes(vp);
 
     for (const node of renderList) {
       if (this.activeFilter !== 'all' && node.metrics?.element !== this.activeFilter) {
@@ -627,14 +747,13 @@ export class WorldRenderer {
 
       const isSelected = !isArt && node.id === this.selectedNodeId;
       const isHovered = !isArt && !this.selectedNodeId && node.id === this.hoveredNodeId;
-      const isConnected =
-        !isArt && !this.unifiedMode && !!activeNodeId && connectedNodeIds.has(node.id);
+      const isConnected = !isArt && !!activeNodeId && connectedNodeIds.has(node.id);
 
       const shouldShowAura =
         !isArt &&
         !isSelected &&
         !isHovered &&
-        (this.unifiedMode ? this.lineageNodeIds && this.lineageNodeIds.has(node.id) : isConnected);
+        isConnected;
 
       let isDimmedByDiag = false;
       if (this.devToolsMode && this.diagnosticFilter !== 'all') {
@@ -650,18 +769,18 @@ export class WorldRenderer {
 
       const isDimmed =
         isDimmedByDiag ||
-        (!isArt && !this.unifiedMode && !!activeNodeId && !isSelected && !isConnected && !isHovered);
+        (!isArt && !!activeNodeId && !isSelected && !isConnected && !isHovered);
 
       ctx.save();
       // Keep unselected elements visible at exactly 20% opacity (or 12% in focused diagnostic mode)
       if (isDimmed) {
-        ctx.globalAlpha = isDimmedByDiag ? 0.10 : 0.20;
+        ctx.globalAlpha = isDimmedByDiag ? (this.lightweightMode ? 0.28 : 0.10) : (this.lightweightMode ? 0.55 : 0.20);
       } else {
         ctx.globalAlpha = 1.0;
       }
 
       // 1. Lineage / Connection aura
-      if (shouldShowAura) {
+      if (shouldShowAura && !this.lightweightMode) {
         ctx.save();
         ctx.translate(pos.x, pos.y);
         ctx.beginPath();
@@ -713,23 +832,8 @@ export class WorldRenderer {
         ctx.restore();
       }
 
-      const origX = node.x;
-      const origY = node.y;
-      const origR = node.metrics?.radius || 50;
-
-      if (this.unifiedMode) {
-        node.x = pos.x;
-        node.y = pos.y;
-        if (node.metrics) node.metrics.radius = r;
-      }
-
-      this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered, isArt, shouldShowAura);
-
-      if (this.unifiedMode) {
-        node.x = origX;
-        node.y = origY;
-        if (node.metrics) node.metrics.radius = origR;
-      }
+      if (this.lightweightMode) this.glyphRenderer.renderCompactNode(ctx, node, lod, isSelected || isHovered || shouldShowAura, isArt);
+      else this.glyphRenderer.renderNode(ctx, node, lod, isSelected, isHovered, isArt, shouldShowAura);
       ctx.restore();
     }
   }

@@ -34,6 +34,19 @@ export interface DevtoolsInstallStatus {
   port?: number;
   upgradeAvailable?: boolean;
   componentTracing?: boolean;
+  refreshAvailable?: boolean;
+}
+
+function generatedAdapterContent(port: number): string {
+  const endpoint = `http://127.0.0.1:${port}/api/telemetry`;
+  return devAdapterScript.replace("const endpoint = new URL('/api/telemetry', import.meta.url).href;", `const endpoint = ${JSON.stringify(endpoint)};`)
+    + `\n\nconst active = import.meta.env.DEV && import.meta.env.VITE_GRIMOIRE === '1';\n`
+    + `export function profileGrimoireRoot(React, element) {\n  return active && !globalThis.__grimoireFiberHookActive ? profileReact(React, 'App', element) : element;\n}\n`
+    + `export function installGrimoireVueWhenActive(app) {\n  return active ? installGrimoireVue(app) : app;\n}\n`;
+}
+
+function generatedFiberContent(port: number): string {
+  return reactFiberHookScript.replace('__GRIMOIRE_ENDPOINT__', `http://127.0.0.1:${port}/api/telemetry`);
 }
 
 function readState(targetDir: string): InstallState | null {
@@ -78,7 +91,7 @@ function isCallNamed(node: ts.Node, name: string): node is ts.CallExpression {
     || (ts.isPropertyAccessExpression(expression) && expression.name.text === name);
 }
 
-function findTarget(source: string, file: string, framework: 'react' | 'vue'): { start: number; end: number; reactName?: string } {
+export function findTarget(source: string, file: string, framework: 'react' | 'vue'): { start: number; end: number; reactName?: string } {
   const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.jsx') ? ts.ScriptKind.JSX : file.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind);
   if ((ast as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics?.length) {
@@ -156,7 +169,8 @@ function assertSafeGeneratedDirectory(targetDir: string): string {
 export function getDevtoolsInstallStatus(targetDir: string): DevtoolsInstallStatus {
   const state = readState(targetDir);
   return state ? { installed: true, framework: state.framework, entry: state.entry, command: `npm run ${scriptName}`, port: state.port,
-    upgradeAvailable: state.framework === 'react' && !state.fiberHash, componentTracing: state.framework === 'vue' || Boolean(state.fiberHash) } : { installed: false };
+    upgradeAvailable: state.framework === 'react' && !state.fiberHash, componentTracing: state.framework === 'vue' || Boolean(state.fiberHash),
+    refreshAvailable: state.adapterHash !== hash(generatedAdapterContent(state.port)) || Boolean(state.fiberHash && state.fiberHash !== hash(generatedFiberContent(state.port))) } : { installed: false };
 }
 
 export function installDevtools(targetDir: string, port: number): DevtoolsInstallStatus {
@@ -207,14 +221,10 @@ export function installDevtools(targetDir: string, port: number): DevtoolsInstal
   const newManifest = addScript(manifestText, script);
   JSON.parse(newManifest);
   const directory = assertSafeGeneratedDirectory(targetDir);
-  const endpoint = `http://127.0.0.1:${port}/api/telemetry`;
-  const generatedAdapter = devAdapterScript.replace("const endpoint = new URL('/api/telemetry', import.meta.url).href;", `const endpoint = ${JSON.stringify(endpoint)};`)
-    + `\n\nconst active = import.meta.env.DEV && import.meta.env.VITE_GRIMOIRE === '1';\n`
-    + `export function profileGrimoireRoot(React, element) {\n  return active && !globalThis.__grimoireFiberHookActive ? profileReact(React, 'App', element) : element;\n}\n`
-    + `export function installGrimoireVueWhenActive(app) {\n  return active ? installGrimoireVue(app) : app;\n}\n`;
+  const generatedAdapter = generatedAdapterContent(port);
   const generatedRunner = `import { spawn } from 'node:child_process';\nconst child = spawn(${JSON.stringify(devCommand)}, { shell: true, stdio: 'inherit', env: { ...process.env, VITE_GRIMOIRE: '1' } });\nchild.on('exit', (code) => { process.exitCode = code ?? 1; });\nchild.on('error', (error) => { console.error(error); process.exitCode = 1; });\n`;
   const generatedDeclaration = 'export declare function profileGrimoireRoot<T>(React: unknown, element: T): T;\nexport declare function installGrimoireVueWhenActive<T>(app: T): T;\n';
-  const generatedFiber = framework === 'react' ? reactFiberHookScript.replace('__GRIMOIRE_ENDPOINT__', endpoint) : undefined;
+  const generatedFiber = framework === 'react' ? generatedFiberContent(port) : undefined;
   const state: InstallState = { entry: path.relative(targetDir, entry), originalExpression, installedExpression, importLine, adapter: 'adapter.js', adapterHash: hash(generatedAdapter), declarationHash: hash(generatedDeclaration), runnerHash: hash(generatedRunner), fiberHash: generatedFiber ? hash(generatedFiber) : undefined, fiberImportLine, script, framework, port };
   const stateFile = path.join(directory, stateName);
   try {
@@ -271,6 +281,39 @@ export function upgradeDevtools(targetDir: string): DevtoolsInstallStatus {
     if (fs.existsSync(fiberFile)) fs.unlinkSync(fiberFile);
     fs.writeFileSync(entry, source);
     fs.writeFileSync(adapter, adapterSource);
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
+    throw error;
+  }
+  return getDevtoolsInstallStatus(targetDir);
+}
+
+export function refreshDevtools(targetDir: string, port: number): DevtoolsInstallStatus {
+  const state = readState(targetDir);
+  if (!state) throw new Error('No Grimoire DevTools installation was found.');
+  if (state.framework === 'react' && !state.fiberHash) throw new Error('Add component tracing before refreshing this older React setup.');
+  const directory = path.join(targetDir, directoryName);
+  const adapter = path.join(directory, state.adapter);
+  const fiberFile = path.join(directory, 'fiber-hook.js');
+  const entry = path.resolve(targetDir, state.entry);
+  assertRegularFileWithin(targetDir, entry);
+  const entrySource = fs.readFileSync(entry, 'utf8');
+  if (state.adapter !== 'adapter.js' || !entrySource.includes(state.importLine) || !entrySource.includes(state.installedExpression)) throw new Error('The generated entry was changed; refresh was skipped.');
+  if (fs.lstatSync(adapter).isSymbolicLink()) throw new Error('Symlinked generated adapter is not supported.');
+  const previousAdapter = fs.readFileSync(adapter, 'utf8');
+  if (hash(previousAdapter) !== state.adapterHash) throw new Error('The generated adapter was changed; refresh was skipped.');
+  const previousFiber = state.fiberHash ? fs.readFileSync(fiberFile, 'utf8') : undefined;
+  if (state.fiberHash && (fs.lstatSync(fiberFile).isSymbolicLink() || hash(previousFiber!) !== state.fiberHash)) throw new Error('The generated Fiber observer was changed; refresh was skipped.');
+  const nextAdapter = generatedAdapterContent(port);
+  const nextFiber = state.fiberHash ? generatedFiberContent(port) : undefined;
+  const stateFile = path.join(directory, stateName);
+  const nextState = { ...state, port, adapterHash: hash(nextAdapter), fiberHash: nextFiber ? hash(nextFiber) : undefined };
+  try {
+    fs.writeFileSync(adapter, nextAdapter);
+    if (nextFiber) fs.writeFileSync(fiberFile, nextFiber);
+    fs.writeFileSync(stateFile, JSON.stringify(nextState, null, 2) + '\n');
+  } catch (error) {
+    fs.writeFileSync(adapter, previousAdapter);
+    if (previousFiber) fs.writeFileSync(fiberFile, previousFiber);
     fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
     throw error;
   }
