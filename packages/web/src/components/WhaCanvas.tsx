@@ -4,7 +4,7 @@ import { Camera, WorldRenderer, VFXEngine } from '@wha/canvas-engine';
 import { useGrimoireStore } from '../store/useGrimoireStore.js';
 import { translate } from '../i18n.js';
 import { DevtoolsOverview } from './DevtoolsOverview.js';
-import type { WebpackBuildStatus } from '../transport/transport.js';
+import type { ViteBuildStatus, WebpackBuildStatus } from '../transport/transport.js';
 import { DevtoolsWorkbench } from './DevtoolsWorkbench.js';
 
 export interface WhaCanvasHandle {
@@ -18,14 +18,16 @@ export interface WhaCanvasHandle {
 interface WhaCanvasProps {
   onMount?: (handle: WhaCanvasHandle) => void;
   onMeasureBuild?: (appId?: string) => Promise<{ measured: number }>;
-  onImportWebpackStats?: (relativePath: string) => Promise<{ measured: number }>;
+  onGetViteBuildStatus?: () => Promise<ViteBuildStatus>;
+  onStopViteBuild?: () => Promise<ViteBuildStatus>;
+  onImportWebpackStats?: (relativePath: string, compilationId?: string) => Promise<{ measured: number }>;
   onGetWebpackBuildStatus?: () => Promise<WebpackBuildStatus>;
   onStartWebpackBuild?: (appId: string, script: string, statsPath: string) => Promise<WebpackBuildStatus>;
   onStopWebpackBuild?: () => Promise<WebpackBuildStatus>;
   onStartLocator?: () => Promise<{ locate: boolean; expiresAt: number }>;
 }
 
-export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild, onImportWebpackStats, onGetWebpackBuildStatus, onStartWebpackBuild, onStopWebpackBuild, onStartLocator }) => {
+export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild, onGetViteBuildStatus, onStopViteBuild, onImportWebpackStats, onGetWebpackBuildStatus, onStartWebpackBuild, onStopWebpackBuild, onStartLocator }) => {
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [overlapPicker, setOverlapPicker] = useState<{ x: number; y: number; nodes: SealNode[] } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -381,7 +383,7 @@ export const WhaCanvas: React.FC<WhaCanvasProps> = ({ onMount, onMeasureBuild, o
         onStartWebpackBuild={onStartWebpackBuild} onStopWebpackBuild={onStopWebpackBuild} onFocusNode={(nodeId) => {
         const target = rendererRef.current?.nodeMap.get(nodeId);
         if (target) cameraRef.current?.focusOnNode(target, 0.9);
-      }} onMeasureBuild={onMeasureBuild} onOpenAnalysis={() => setAnalysisOpen(true)} />
+      }} onMeasureBuild={onMeasureBuild} onGetViteBuildStatus={onGetViteBuildStatus} onStopViteBuild={onStopViteBuild} onOpenAnalysis={() => setAnalysisOpen(true)} />
       {analysisOpen && <DevtoolsWorkbench onClose={() => setAnalysisOpen(false)} onFocusNode={(nodeId) => {
         const target = rendererRef.current?.nodeMap.get(nodeId);
         if (target) cameraRef.current?.focusOnNode(target, 0.9);

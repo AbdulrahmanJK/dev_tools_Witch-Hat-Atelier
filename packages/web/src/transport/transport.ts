@@ -5,7 +5,9 @@ export interface ITransport {
   subscribeEvents(onReload: () => void, onTelemetry?: (event: DevToolsTelemetryEvent | DevToolsTelemetryEvent[]) => void, onScanStatus?: (status: ScanStatus) => void): () => void;
   openFileInEditor(filePath: string, line?: number): void;
   measureBuild?(appId?: string): Promise<{ measured: number }>;
-  importWebpackStats?(relativePath: string): Promise<{ measured: number }>;
+  getViteBuildStatus?(): Promise<ViteBuildStatus>;
+  stopViteBuild?(): Promise<ViteBuildStatus>;
+  importWebpackStats?(relativePath: string, compilationId?: string): Promise<{ measured: number }>;
   getWebpackBuildStatus?(): Promise<WebpackBuildStatus>;
   startWebpackBuild?(appId: string, script: string, statsPath: string): Promise<WebpackBuildStatus>;
   stopWebpackBuild?(): Promise<WebpackBuildStatus>;
@@ -31,6 +33,17 @@ export interface WebpackBuildStatus {
   command: string;
   cwd: string;
   statsPath: string;
+  startedAt: number | null;
+  endedAt: number | null;
+  measured: number;
+  error: string | null;
+  logs: string[];
+}
+
+export interface ViteBuildStatus {
+  state: 'idle' | 'running' | 'ready' | 'error' | 'cancelled';
+  appId: string;
+  phase: string;
   startedAt: number | null;
   endedAt: number | null;
   measured: number;

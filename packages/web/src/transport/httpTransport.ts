@@ -1,5 +1,5 @@
 import type { DevToolsTelemetryEvent, GrimoireGraph } from '@wha/core';
-import type { DevtoolsInstallStatus, ITransport, ScanStatus, WebpackBuildStatus } from './transport.js';
+import type { DevtoolsInstallStatus, ITransport, ScanStatus, ViteBuildStatus, WebpackBuildStatus } from './transport.js';
 
 export class HttpTransport implements ITransport {
   private projectRoot: string | null = null;
@@ -132,11 +132,23 @@ export class HttpTransport implements ITransport {
     if (!response.ok) throw new Error(payload.error || `Build failed: HTTP ${response.status}`);
     return payload;
   }
-  public async importWebpackStats(relativePath: string): Promise<{ measured: number }> {
-    const response = await fetch('/api/webpack-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: relativePath }) });
+  public async getViteBuildStatus(): Promise<ViteBuildStatus> {
+    const response = await fetch('/api/build-measure', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Vite build status: HTTP ${response.status}`);
+    return response.json();
+  }
+  public async stopViteBuild(): Promise<ViteBuildStatus> {
+    const response = await fetch('/api/build-measure', { method: 'DELETE' });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `Stats import failed: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(payload.error || `Vite build stop: HTTP ${response.status}`);
+    return payload;
+  }
+  public async importWebpackStats(relativePath: string, compilationId?: string): Promise<{ measured: number }> {
+    const response = await fetch('/api/webpack-stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: relativePath, compilation: compilationId }) });
+    const payload = await response.json();
+    if (!response.ok) throw Object.assign(new Error(payload.error || `Stats import failed: HTTP ${response.status}`),
+      { compilations: payload.compilations });
     return payload;
   }
   public async getGraph(): Promise<GrimoireGraph> {

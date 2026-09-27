@@ -142,10 +142,12 @@ export const App: React.FC = () => {
     if (!transportRef.current.measureBuild) throw new Error('Build measurement requires the local Grimoire server.');
     return transportRef.current.measureBuild(appId);
   }, []);
+  const handleGetViteBuildStatus = useCallback(() => transportRef.current.getViteBuildStatus!(), []);
+  const handleStopViteBuild = useCallback(() => transportRef.current.stopViteBuild!(), []);
 
-  const handleImportWebpackStats = useCallback(async (relativePath: string) => {
+  const handleImportWebpackStats = useCallback(async (relativePath: string, compilationId?: string) => {
     if (!transportRef.current.importWebpackStats) throw new Error('Webpack stats import requires the local Grimoire server.');
-    return transportRef.current.importWebpackStats(relativePath);
+    return transportRef.current.importWebpackStats(relativePath, compilationId);
   }, []);
   const handleGetWebpackBuildStatus = useCallback(() => transportRef.current.getWebpackBuildStatus!(), []);
   const handleStartWebpackBuild = useCallback((appId: string, script: string, statsPath: string) => transportRef.current.startWebpackBuild!(appId, script, statsPath), []);
@@ -222,6 +224,7 @@ export const App: React.FC = () => {
         onRemoveWebpackDevtools={serverConnected ? handleRemoveWebpackDevtools : undefined}
         onRefreshWebpackDevtools={serverConnected ? handleRefreshWebpackDevtools : undefined} />
       {graphReady && <WhaCanvas onMount={handleMountCanvas} onMeasureBuild={serverConnected ? handleMeasureBuild : undefined} onImportWebpackStats={serverConnected ? handleImportWebpackStats : undefined}
+        onGetViteBuildStatus={serverConnected ? handleGetViteBuildStatus : undefined} onStopViteBuild={serverConnected ? handleStopViteBuild : undefined}
         onGetWebpackBuildStatus={serverConnected ? handleGetWebpackBuildStatus : undefined} onStartWebpackBuild={serverConnected ? handleStartWebpackBuild : undefined}
         onStopWebpackBuild={serverConnected ? handleStopWebpackBuild : undefined} onStartLocator={serverConnected ? handleStartLocator : undefined} />}
       <InspectorDrawer transport={transportRef.current} onFocusNode={handleFocusNode} />

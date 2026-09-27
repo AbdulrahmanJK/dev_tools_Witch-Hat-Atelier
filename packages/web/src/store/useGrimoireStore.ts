@@ -1,10 +1,17 @@
 import type { DependencySeal, DevToolsTelemetryEvent, DiagnosticFilter, GrimoireGraph, SealNode } from '@wha/core';
 import { create } from 'zustand';
 import type { Locale } from '../i18n.js';
-import { buildSnapshot, matchTelemetry, MAX_SAVED_SESSIONS, MAX_SESSION_EVENTS, persistBuildSnapshots, persistSessions, projectKey, readBuildSnapshots, readSavedSessions, validSession, type BuildSnapshot, type EventMatch, type RecordedEvent, type RecordingSession } from '../devtools/session.js';
+import { buildSnapshot, matchTelemetry, MAX_BUILD_SNAPSHOTS, MAX_SAVED_SESSIONS, MAX_SESSION_EVENTS, persistBuildSnapshots, persistSessions, projectKey, readBuildSnapshots, readSavedSessions, validSession, type BuildSnapshot, type EventMatch, type RecordedEvent, type RecordingSession } from '../devtools/session.js';
 
 const canonicalName = (name: string) => name.replace(/[^a-z0-9]/gi, '').toLowerCase();
 const isHotNode = (node: SealNode) => Boolean(node.telemetry?.isOverheating || ['overcharged', 'fissure'].includes(node.metrics?.devTools?.overloadState || ''));
+function latestBuildTime(graph: GrimoireGraph | null): number {
+  let latest = 0;
+  for (const dependency of graph?.dependencies || []) {
+    for (const build of Object.values(dependency.buildsByApp || {})) latest = Math.max(latest, build.measuredAt);
+  }
+  return latest;
+}
 const findingIndexes = new WeakMap<GrimoireGraph, Map<string, string[]>>();
 function findingIndex(graph: GrimoireGraph | null): Map<string, string[]> {
   if (!graph) return new Map();
@@ -30,6 +37,10 @@ export interface GrimoireState {
   hotNodeCount: number;
   browserLongTasks: { count: number; totalDurationMs: number };
   unmatchedRuntime: { renders: number; domUpdates: number };
+  runtimeLostEvents: number;
+  deliveryDelaySamples: number[];
+  deliveryDelayLastMs: number | null;
+  deliveryDelayP95Ms: number | null;
   recentRenders: Array<DevToolsTelemetryEvent & { mappedNodeId?: string }>;
   coverage: { received: number; matched: number; inferred: number; ambiguous: number; unmatched: number };
   runtimeConnections: Record<string, DevToolsTelemetryEvent>;
@@ -37,6 +48,7 @@ export interface GrimoireState {
   savedSessions: RecordingSession[];
   recording: boolean;
   buildSnapshots: BuildSnapshot[];
+  selectedBuildAppId: string | null;
   runtimeResolutions: Record<string, string>;
   locatorResult: { event: DevToolsTelemetryEvent; match: EventMatch } | null;
   selectedNodeId: string | null;
@@ -70,6 +82,7 @@ export interface GrimoireState {
   resolveRuntime: (runtimeId: string, nodeId: string | null) => void;
   resolveRecordedEvent: (eventId: string, nodeId: string | null) => void;
   saveBuildSnapshot: (graph: GrimoireGraph) => void;
+  selectBuildAppId: (appId: string) => void;
   selectNode: (nodeId: string | null) => void;
   selectDependency: (dependencyId: string | null) => void;
   hoverNode: (nodeId: string | null, clientX?: number, clientY?: number) => void;
@@ -100,6 +113,10 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
   hotNodeCount: 0,
   browserLongTasks: { count: 0, totalDurationMs: 0 },
   unmatchedRuntime: { renders: 0, domUpdates: 0 },
+  runtimeLostEvents: 0,
+  deliveryDelaySamples: [],
+  deliveryDelayLastMs: null,
+  deliveryDelayP95Ms: null,
   recentRenders: [],
   coverage: { received: 0, matched: 0, inferred: 0, ambiguous: 0, unmatched: 0 },
   runtimeConnections: {},
@@ -107,6 +124,7 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
   savedSessions: [],
   recording: false,
   buildSnapshots: [],
+  selectedBuildAppId: null,
   runtimeResolutions: {},
   locatorResult: null,
   selectedNodeId: null,
@@ -148,12 +166,21 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
         } } : node.metrics,
       };
     });
-    const mergedGraph = { ...graph, nodes };
+    const availableBuildApps = new Set((graph.dependencies || []).flatMap((dependency) => Object.keys(dependency.buildsByApp || {})));
+    const incomingNewest = latestBuildTime(graph);
+    const priorNewest = latestBuildTime(current.graph);
+    const selectedBuildAppId = !changedProject && incomingNewest <= priorNewest && current.selectedBuildAppId && availableBuildApps.has(current.selectedBuildAppId)
+      ? current.selectedBuildAppId : graph.activeBuildAppId && availableBuildApps.has(graph.activeBuildAppId) ? graph.activeBuildAppId : null;
+    const dependencies = selectedBuildAppId ? graph.dependencies?.map((dependency) => ({
+      ...dependency, build: dependency.buildsByApp?.[selectedBuildAppId],
+    })) : graph.dependencies;
+    const mergedGraph = { ...graph, nodes, dependencies, activeBuildAppId: selectedBuildAppId || undefined };
     const nodeMap = new Map(nodes.map((n) => [n.id, n]));
     set({
-      graph: mergedGraph, nodes, nodeMap, hotNodeCount: nodes.filter(isHotNode).length,
+      graph: mergedGraph, nodes, nodeMap, hotNodeCount: nodes.filter(isHotNode).length, selectedBuildAppId,
       ...(changedProject ? { currentSession: null, savedSessions: readSavedSessions(projectKey(graph)), buildSnapshots: readBuildSnapshots(projectKey(graph)), recording: false,
-        runtimeResolutions: {}, runtimeConnections: {}, locatorResult: null, coverage: { received: 0, matched: 0, inferred: 0, ambiguous: 0, unmatched: 0 } } : {}),
+        runtimeResolutions: {}, runtimeConnections: {}, runtimeLostEvents: 0, deliveryDelaySamples: [], deliveryDelayLastMs: null, deliveryDelayP95Ms: null,
+        locatorResult: null, coverage: { received: 0, matched: 0, inferred: 0, ambiguous: 0, unmatched: 0 } } : {}),
       selectedNodeId: !changedProject && current.selectedNodeId && nodeMap.has(current.selectedNodeId) ? current.selectedNodeId : null,
       selectedDependencyId: !changedProject && current.selectedDependencyId && graph.dependencies?.some((seal) => seal.id === current.selectedDependencyId) ? current.selectedDependencyId : null,
     });
@@ -171,6 +198,9 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
       let coverage = state.coverage;
       let browserLongTasks = state.browserLongTasks;
       let unmatchedRuntime = state.unmatchedRuntime;
+      let runtimeLostEvents = state.runtimeLostEvents;
+      let deliveryDelaySamples = state.deliveryDelaySamples;
+      let deliveryDelayLastMs = state.deliveryDelayLastMs;
       let runtimeConnections = state.runtimeConnections;
       let locatorResult = state.locatorResult;
       const recent: GrimoireState['recentRenders'] = [];
@@ -193,6 +223,11 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
           : { status: 'unmatched', candidates: [], explanation: 'not-a-component' } as EventMatch;
 
         if (event.type === 'RENDER') {
+          const delay = Date.now() - event.timestamp;
+          if (Number.isFinite(delay) && delay >= 0 && delay <= 60000) {
+            deliveryDelayLastMs = delay;
+            deliveryDelaySamples = [...deliveryDelaySamples, delay].slice(-100);
+          }
           coverage = { ...coverage, received: coverage.received + 1,
             matched: coverage.matched + Number(match.status === 'exact'), inferred: coverage.inferred + Number(match.status === 'inferred'),
             ambiguous: coverage.ambiguous + Number(match.status === 'ambiguous'), unmatched: coverage.unmatched + Number(match.status === 'unmatched') };
@@ -206,6 +241,11 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
         if (event.type === 'LOCATE') { locatorResult = { event, match }; changed = true; }
         if (event.type === 'LONG_TASK') {
           browserLongTasks = { count: browserLongTasks.count + 1, totalDurationMs: browserLongTasks.totalDurationMs + event.durationMs };
+          changed = true;
+          continue;
+        }
+        if (event.type === 'LOSS') {
+          runtimeLostEvents += event.droppedCount || 0;
           changed = true;
           continue;
         }
@@ -262,8 +302,11 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
         }
       }
       if (!changed) return state;
+      const sortedDelays = deliveryDelaySamples === state.deliveryDelaySamples ? null : [...deliveryDelaySamples].sort((a, b) => a - b);
       return {
-        coverage, browserLongTasks, unmatchedRuntime, runtimeConnections, locatorResult,
+        coverage, browserLongTasks, unmatchedRuntime, runtimeLostEvents, runtimeConnections, locatorResult,
+        deliveryDelaySamples, deliveryDelayLastMs,
+        deliveryDelayP95Ms: sortedDelays?.[Math.max(0, Math.ceil(sortedDelays.length * 0.95) - 1)] ?? state.deliveryDelayP95Ms,
         currentSession: sessionEvents && state.currentSession ? { ...state.currentSession, events: sessionEvents, dropped } : state.currentSession,
         recentRenders: recent.length ? [...recent.reverse(), ...state.recentRenders].slice(0, 40) : state.recentRenders,
         ...(nodeMap !== state.nodeMap ? { nodeMap, nodes: state.nodes.map((node) => nodeMap.get(node.id) || node),
@@ -320,10 +363,16 @@ export const useGrimoireStore = create<GrimoireState>((set, get) => ({
   },
   saveBuildSnapshot: (graph) => {
     const snapshot = buildSnapshot(graph);
-    if (!Object.keys(snapshot.packages).length || get().buildSnapshots.some((item) => item.measuredAt === snapshot.measuredAt)) return;
-    const buildSnapshots = [snapshot, ...get().buildSnapshots].slice(0, 5);
+    if (!Object.keys(snapshot.packages).length || get().buildSnapshots.some((item) => item.measuredAt === snapshot.measuredAt && item.appId === snapshot.appId)) return;
+    const buildSnapshots = [snapshot, ...get().buildSnapshots].slice(0, MAX_BUILD_SNAPSHOTS);
     persistBuildSnapshots(snapshot.projectKey, buildSnapshots);
     set({ buildSnapshots });
+  },
+  selectBuildAppId: (appId) => {
+    const { graph, nodes } = get();
+    if (!graph || !(graph.dependencies || []).some((dependency) => dependency.buildsByApp?.[appId])) return;
+    set({ selectedBuildAppId: appId, graph: { ...graph, nodes, activeBuildAppId: appId,
+      dependencies: graph.dependencies?.map((dependency) => ({ ...dependency, build: dependency.buildsByApp?.[appId] })) } });
   },
 
   selectNode: (nodeId) => {

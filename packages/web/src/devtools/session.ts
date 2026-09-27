@@ -4,13 +4,15 @@ export type MappingStatus = 'exact' | 'inferred' | 'ambiguous' | 'unmatched';
 export interface EventMatch { status: MappingStatus; nodeId?: string; candidates: string[]; explanation: string; }
 export interface RecordedEvent { id: string; event: DevToolsTelemetryEvent; match: EventMatch; }
 export interface RecordingSession { version: 1; id: string; projectKey: string; name: string; startedAt: number; stoppedAt?: number; dropped: number; events: RecordedEvent[]; }
-export interface BuildSnapshot { id: string; projectKey: string; measuredAt: number; source?: 'vite' | 'webpack-stats'; configuration?: string; packages: Record<string, { bytes: number; initial: boolean; chunks: string[] }>; }
+export interface BuildSnapshot { id: string; projectKey: string; measuredAt: number; appId?: string; source?: 'vite' | 'webpack-stats'; configuration?: string; packages: Record<string, { bytes: number; initial: boolean; chunks: string[] }>; }
+export const MAX_BUILD_SNAPSHOTS = 20;
 
 const canonical = (value: string) => value.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase();
 const fileName = (value: string) => {
   try { if (/^https?:/.test(value)) value = decodeURIComponent(new URL(value).pathname); } catch { /* use given path */ }
   return value.split(/[?#]/)[0]?.replace(/\\/g, '/') || '';
 };
+const sameFilePath = (reported: string, indexed: string) => reported === indexed || reported.endsWith(`/${indexed.replace(/^\/+/, '')}`);
 const runtimeKey = (event: DevToolsTelemetryEvent) => event.runtimeId ? `${event.pageId || 'page'}:${event.runtimeId}` : '';
 
 interface MatchIndex {
@@ -26,11 +28,11 @@ function indexFor(graph: GrimoireGraph): MatchIndex {
   const index: MatchIndex = { byId: new Map(), byName: new Map(), componentsByBasename: new Map(), renderChildren: new Map() };
   for (const node of graph.nodes) {
     index.byId.set(node.id, node);
-    const key = canonical(node.name);
-    const sameName = index.byName.get(key) || [];
-    sameName.push(node);
-    index.byName.set(key, sameName);
     if (node.kind === 'component') {
+      const key = canonical(node.name);
+      const sameName = index.byName.get(key) || [];
+      sameName.push(node);
+      index.byName.set(key, sameName);
       const file = fileName(node.file);
       const basename = file.split('/').pop() || '';
       const sameBasename = index.componentsByBasename.get(basename) || [];
@@ -57,10 +59,11 @@ export function matchTelemetry(graph: GrimoireGraph | null, event: DevToolsTelem
   const override = resolutions[runtimeKey(event)];
   if (override && index?.byId.has(override)) return { status: 'exact', nodeId: override, candidates: [override], explanation: 'manual' };
   const name = canonical(event.componentName);
-  const nameMatches = name ? index?.byName.get(name) || [] : [];
+  const named = name ? index?.byName.get(name) || [] : [];
+  const nameMatches = event.framework ? named.filter((node) => node.framework === event.framework) : named;
   const source = event.file ? fileName(event.file) : '';
   if (source) {
-    const fileMatches = nameMatches.filter((node) => source.endsWith(fileName(node.file)));
+    const fileMatches = nameMatches.filter((node) => sameFilePath(source, fileName(node.file)));
     if (fileMatches.length === 1) return { status: 'exact', nodeId: fileMatches[0]!.id, candidates: [fileMatches[0]!.id], explanation: 'file-and-name' };
     if (fileMatches.length > 1) return { status: 'ambiguous', candidates: fileMatches.map((node) => node.id), explanation: 'same-file-and-name' };
   }
@@ -77,7 +80,8 @@ export function matchTelemetry(graph: GrimoireGraph | null, event: DevToolsTelem
   }
   if (source) {
     const basename = source.split('/').pop() || '';
-    const fileMatches = (index?.componentsByBasename.get(basename) || []).filter((node) => source.endsWith(fileName(node.file)));
+    const fileMatches = (index?.componentsByBasename.get(basename) || [])
+      .filter((node) => (!event.framework || node.framework === event.framework) && sameFilePath(source, fileName(node.file)));
     if (fileMatches.length === 1) return { status: 'inferred', nodeId: fileMatches[0]!.id, candidates: [fileMatches[0]!.id], explanation: 'file-only' };
   }
   return { status: 'unmatched', candidates: [], explanation: source ? 'unknown-file-and-name' : 'unknown-name' };
@@ -108,11 +112,11 @@ export function validSession(input: unknown, key: string): input is RecordingSes
 export function readBuildSnapshots(key: string): BuildSnapshot[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(`grimoire-builds:${key}`) || '[]');
-    return Array.isArray(parsed) ? parsed.filter((item): item is BuildSnapshot => item?.projectKey === key && item?.packages && typeof item.packages === 'object').slice(0, 5) : [];
+    return Array.isArray(parsed) ? parsed.filter((item): item is BuildSnapshot => item?.projectKey === key && item?.packages && typeof item.packages === 'object').slice(0, MAX_BUILD_SNAPSHOTS) : [];
   } catch { return []; }
 }
 export function persistBuildSnapshots(key: string, snapshots: BuildSnapshot[]): void {
-  try { localStorage.setItem(`grimoire-builds:${key}`, JSON.stringify(snapshots.slice(0, 5))); } catch { /* browser storage unavailable */ }
+  try { localStorage.setItem(`grimoire-builds:${key}`, JSON.stringify(snapshots.slice(0, MAX_BUILD_SNAPSHOTS))); } catch { /* browser storage unavailable */ }
 }
 export function buildSnapshot(graph: GrimoireGraph): BuildSnapshot {
   const packages: BuildSnapshot['packages'] = {};
@@ -123,7 +127,8 @@ export function buildSnapshot(graph: GrimoireGraph): BuildSnapshot {
   const measuredAt = graph.dependencies?.find((dependency) => dependency.build)?.build?.measuredAt || Date.now();
   const source = graph.dependencies?.find((dependency) => dependency.build?.source)?.build?.source;
   const configuration = graph.dependencies?.find((dependency) => dependency.build?.configuration)?.build?.configuration;
-  return { id: crypto.randomUUID(), projectKey: projectKey(graph), measuredAt, source, configuration, packages };
+  const appId = graph.activeBuildAppId || graph.dependencies?.find((dependency) => dependency.build?.appId)?.build?.appId;
+  return { id: crypto.randomUUID(), projectKey: projectKey(graph), measuredAt, appId, source, configuration, packages };
 }
 export function matchedNode(entry: RecordedEvent, nodes: SealNode[]): SealNode | undefined {
   return nodes.find((node) => node.id === entry.match.nodeId);

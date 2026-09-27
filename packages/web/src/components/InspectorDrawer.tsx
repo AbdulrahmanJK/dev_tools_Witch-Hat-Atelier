@@ -51,7 +51,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
           <p>{t('sourceSpread')}: {dependency.sourceRisk.toUpperCase()} · {dependency.direct ? t('declaredDependency') : dependency.importCount ? t('undeclaredDependency') : t('transitiveDependency')}</p>
           <p>{t('importedIn')} {dependency.importerNodeIds.length} {t('codeSeals')}; {dependency.importCount} {t('importDeclarations')}.</p>
           {dependency.dynamicImportCount > 0 && <p>{dependency.dynamicImportCount} {t('dynamicImports')}.</p>}
-          {dependency.build ? <p>{t('estimatedJs')}: {Math.round((dependency.build.emittedBytesEstimate || 0) / 1024)} KiB {t('acrossChunks')} {dependency.build.chunks.length} · {dependency.build.initial ? t('initialEntry') : t('outsideInitial')}. {t('rollupLength')}: {Math.round(dependency.build.renderedBytes / 1024)} KiB.</p> : <p>{t('bundleNotMeasured')}</p>}
+          {dependency.build ? <p>{t('estimatedJs')}: {Math.round((dependency.build.emittedBytesEstimate || 0) / 1024)} KiB {t('acrossChunks')} {dependency.build.chunks.length} · {dependency.build.initial ? t('initialEntry') : t('outsideInitial')}. {t('rollupLength')}: {Math.round(dependency.build.renderedBytes / 1024)} KiB. {dependency.build.appId && `· ${locale === 'ru' ? 'Приложение' : 'Application'}: ${dependency.build.appId}`}</p>
+            : <p>{Object.keys(dependency.buildsByApp || {}).length
+              ? locale === 'ru' ? 'Для выбранного приложения эта библиотека не измерена.' : 'This library was not measured for the selected application.'
+              : t('bundleNotMeasured')}</p>}
           {dependency.build && <p>{t('libraryRingScale')}</p>}
           {dependency.runtime && <p>{t('bundleRuntime')}: {dependency.runtime.sampleCount}, {t('selfTime')} {dependency.runtime.selfTimeMs.toFixed(1)} ms.</p>}
           <div className="devtools-section-title">{t('importingSeals')}</div>
@@ -101,8 +104,9 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
     onFocusNode(id);
   };
 
-  const handleCycleCrumbClick = (name: string) => {
-    const target = Array.from(nodeMap.values()).find((n) => n.name === name);
+  const handleCycleCrumbClick = (file: string) => {
+    const target = graph?.files?.find((item) => item.path === file)?.nodeIds
+      .map((id) => nodeMap.get(id)).find(Boolean);
     if (target) {
       selectNode(target.id);
       onFocusNode(target.id);
@@ -216,17 +220,18 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({ transport, onF
                 <div className="cycle-path-container">
                   <div className="cycle-desc">
                     {t('cycleRisk')}
+                    {' '}{locale === 'ru' ? 'Цикл относится к файлам: показанные ниже пути указывают на импортирующие модули, а не на виновный компонент.' : 'This cycle is between files; the paths below identify importing modules, not a responsible component.'}
                   </div>
                   <div className="cycle-breadcrumbs">
-                    {node.circularPath.map((name, i) => (
+                    {node.circularPath.map((file, i) => (
                       <React.Fragment key={i}>
                         <span
-                          className={`cycle-crumb-item ${name === node.name ? 'active' : ''}`}
-                          onClick={() => handleCycleCrumbClick(name)}
+                          className={`cycle-crumb-item ${file === node.file ? 'active' : ''}`}
+                          onClick={() => handleCycleCrumbClick(file)}
                           style={{ cursor: 'pointer' }}
-                          title={`Jump to ${name}`}
+                          title={file}
                         >
-                          {name}
+                          {file}
                         </span>
                         {i < node.circularPath!.length - 1 && <span className="cycle-arrow"> ➔ </span>}
                       </React.Fragment>

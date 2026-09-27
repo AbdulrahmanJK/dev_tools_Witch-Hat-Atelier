@@ -13,9 +13,9 @@ interface Props {
 type Tab = 'record' | 'compare' | 'vue' | 'libraries';
 const bytes = (value: number) => `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KiB`;
 const clock = (value: number) => new Date(value).toLocaleTimeString();
-const duration = (event: DevToolsTelemetryEvent) => event.durationKind === 'unavailable' || event.type === 'DOM_UPDATE' ? '—' : `${event.durationMs.toFixed(1)} ms`;
-const eventColor = (event: DevToolsTelemetryEvent) => event.type === 'LONG_TASK' ? '#bc4a30' : event.type === 'INTERACTION' ? '#4b80a3' : event.type === 'LOCATE' ? '#32916c' : event.type === 'RENDER' ? '#c18b2f' : '#9a85a8';
-const eventTypeLabel = (event: DevToolsTelemetryEvent, ru: boolean) => ru ? ({ RENDER: 'обновление', DOM_UPDATE: 'изменение DOM', LONG_TASK: 'долгая задача', INTERACTION: 'действие', LOCATE: 'выбор элемента', STATE_MUTATION: 'изменение state', EFFECT_TRIGGER: 'вызов эффекта', HELLO: 'подключение' }[event.type]) : event.type.toLowerCase().replaceAll('_', ' ');
+const duration = (event: DevToolsTelemetryEvent) => event.durationKind === 'unavailable' || event.type === 'DOM_UPDATE' || event.type === 'LOSS' ? '—' : `${event.durationMs.toFixed(1)} ms`;
+const eventColor = (event: DevToolsTelemetryEvent) => event.type === 'LONG_TASK' || event.type === 'LOSS' ? '#bc4a30' : event.type === 'INTERACTION' ? '#4b80a3' : event.type === 'LOCATE' ? '#32916c' : event.type === 'RENDER' ? '#c18b2f' : '#9a85a8';
+const eventTypeLabel = (event: DevToolsTelemetryEvent, ru: boolean) => ru ? ({ RENDER: 'обновление', DOM_UPDATE: 'изменение DOM', LONG_TASK: 'долгая задача', INTERACTION: 'действие', LOCATE: 'выбор элемента', STATE_MUTATION: 'изменение state', EFFECT_TRIGGER: 'вызов эффекта', HELLO: 'подключение', LOSS: 'потеря событий' }[event.type]) : event.type.toLowerCase().replaceAll('_', ' ');
 const mappingExplanation = (value: string, ru: boolean) => ({
   'node-id': ru ? 'ID узла' : 'node ID', manual: ru ? 'выбрано вручную' : 'manual choice', 'file-and-name': ru ? 'файл и имя' : 'file and name',
   'same-file-and-name': ru ? 'несколько узлов в файле' : 'multiple nodes in the file', 'unique-name': ru ? 'уникальное имя' : 'unique name',
@@ -136,10 +136,13 @@ export const DevtoolsWorkbench: React.FC<Props> = ({ onClose, onFocusNode, onFoc
     return [...map.values()].sort((a, b) => b.triggered.size - a.triggered.size || b.tracked.size - a.tracked.size).slice(0, 50);
   }, [entries]);
 
-  const currentBuild = buildSnapshots[0];
+  const currentBuild = store.selectedBuildAppId
+    ? buildSnapshots.find((item) => item.appId === store.selectedBuildAppId)
+    : buildSnapshots[0];
   const activeConnections = Object.values(runtimeConnections).filter((event) => now - event.timestamp < 90000);
   const connectedModes = [...new Set(activeConnections.map((event) => `${event.framework ? event.framework === 'vue' ? 'Vue 3' : 'React' : label('Приложение', 'App')} · ${event.source === 'fiber' ? label('компоненты', 'components') : event.source === 'adapter' ? label('адаптер', 'adapter') : label('браузер', 'browser')}`))];
-  const previousBuild = buildSnapshots[1];
+  const previousBuild = currentBuild?.appId ? buildSnapshots.find((item) => item.id !== currentBuild.id && item.appId === currentBuild.appId
+    && item.source === currentBuild.source && item.configuration === currentBuild.configuration) : undefined;
   const bundleRows = [...new Set([...Object.keys(currentBuild?.packages || {}), ...Object.keys(previousBuild?.packages || {})])].map((name) => ({
     name, current: currentBuild?.packages[name], previous: previousBuild?.packages[name],
   })).sort((a, b) => Math.abs((b.current?.bytes || 0) - (b.previous?.bytes || 0)) - Math.abs((a.current?.bytes || 0) - (a.previous?.bytes || 0)));
@@ -239,8 +242,7 @@ export const DevtoolsWorkbench: React.FC<Props> = ({ onClose, onFocusNode, onFoc
         </>}
         {tab === 'libraries' && <>
           <p className="workbench-explainer">{label('Разница оценённых JS-байтов между двумя ручными Vite-сборками. Значения не равны gzip-размеру или времени выполнения.', 'Estimated JS byte difference between two manually triggered Vite builds. Values are not gzip size or runtime cost.')}</p>
-          {currentBuild ? <><div className="workbench-session-summary">{label('Последнее измерение', 'Latest measurement')}: {new Date(currentBuild.measuredAt).toLocaleString()} · {currentBuild.source || label('источник неизвестен', 'unknown source')} · {currentBuild.configuration || '—'} · {previousBuild ? `${label('Предыдущее', 'Previous')}: ${new Date(previousBuild.measuredAt).toLocaleString()} · ${previousBuild.source || label('источник неизвестен', 'unknown source')} · ${previousBuild.configuration || '—'}` : label('Сделайте второе измерение для сравнения.', 'Measure again for a comparison.')}</div>
-            {previousBuild && (currentBuild.source !== previousBuild.source || currentBuild.configuration !== previousBuild.configuration) && <p className="workbench-message">{label('Источники или приложения различаются; изменение размера нельзя считать точным сравнением.', 'Sources or applications differ; size changes are not directly comparable.')}</p>}
+          {currentBuild ? <><div className="workbench-session-summary">{label('Последнее измерение', 'Latest measurement')}: {new Date(currentBuild.measuredAt).toLocaleString()} · {currentBuild.appId || label('приложение неизвестно', 'unknown application')} · {currentBuild.source || label('источник неизвестен', 'unknown source')} · {currentBuild.configuration || '—'} · {previousBuild ? `${label('Предыдущее', 'Previous')}: ${new Date(previousBuild.measuredAt).toLocaleString()} · ${previousBuild.source || label('источник неизвестен', 'unknown source')} · ${previousBuild.configuration || '—'}` : label('Для сравнения повторите измерение того же приложения и конфигурации.', 'Measure the same application and configuration again to compare.')}</div>
             <div className="workbench-table"><div className="workbench-table-head"><span>{label('Библиотека', 'Library')}</span><span>{label('Было', 'Before')}</span><span>{label('Стало', 'After')}</span><span>Δ</span></div>
               {bundleRows.map((row) => { const change = (row.current?.bytes || 0) - (row.previous?.bytes || 0); const placement = (initial: boolean) => initial ? label('начальная загрузка', 'initial load') : label('ленивые чанки', 'lazy chunks'); return <div className="workbench-table-row" key={row.name}><button onClick={() => { const dependency = graph?.dependencies?.find((item) => item.name === row.name); if (dependency) { selectDependency(dependency.id); onClose(); onFocusDependency(dependency.id); } }}>{row.name}<small>{row.previous && row.current && row.previous.initial !== row.current.initial ? `${placement(row.previous.initial)} → ${placement(row.current.initial)}` : placement(Boolean(row.current?.initial ?? row.previous?.initial))}</small></button><span>{row.previous ? bytes(row.previous.bytes) : '—'}</span><span>{row.current ? bytes(row.current.bytes) : '—'}</span><strong className={change > 0 ? 'delta-up' : 'delta-down'}>{previousBuild ? `${change > 0 ? '+' : ''}${bytes(change)}` : '—'}</strong></div>; })}
             </div></> : <p className="workbench-empty">{label('Измерьте Vite-сборку кнопкой в сводке DevTools. Сборка запускается только по нажатию.', 'Measure a Vite build from the DevTools overview. A build runs only on click.')}</p>}
@@ -254,6 +256,12 @@ const EventDetails: React.FC<{ entry?: RecordedEvent; entries: RecordedEvent[]; 
   const label = (russian: string, english: string) => ru ? russian : english;
   if (!entry) return <div className="workbench-event-detail workbench-empty">{label('Выберите событие на шкале или в списке.', 'Select an event in the timeline or list.')}</div>;
   const event = entry.event;
+  if (event.type === 'LOSS') return <div className="workbench-event-detail">
+    <h3>{label('Потеря событий runtime', 'Runtime event loss')}</h3>
+    <p className="detail-meta">{clock(event.timestamp)} · {event.droppedCount || 0} {label('событий', 'events')}</p>
+    <p className="detail-caution">{label('Очередь локального адаптера переполнилась. Результаты этой записи неполные; проверьте соединение и повторите сценарий.',
+      'The local adapter queue overflowed. This recording is incomplete; check the connection and repeat the scenario.')}</p>
+  </div>;
   const sameCommit = event.type === 'RENDER' && event.commitId != null ? entries.filter((item) => item.event.type === 'RENDER' && item.event.pageId === event.pageId && item.event.commitId === event.commitId) : [];
   const parentInCommit = event.parentRuntimeId ? sameCommit.find((item) => item.event.runtimeId === event.parentRuntimeId) : undefined;
   const childrenInCommit = event.runtimeId ? sameCommit.filter((item) => item.event.parentRuntimeId === event.runtimeId) : [];

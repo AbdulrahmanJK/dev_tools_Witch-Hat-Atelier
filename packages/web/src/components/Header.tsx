@@ -152,7 +152,7 @@ export const Header: React.FC<HeaderProps> = ({ onFitKingdom, onFitNodes, onFocu
                   onFitNodes(orphanIds);
                 }
               }}
-              title={locale === 'ru' ? 'Показать неиспользуемые модули' : 'Show unused modules'}
+              title={locale === 'ru' ? 'Кандидаты без найденных входящих связей; проверьте перед удалением' : 'Candidates with no incoming links found; verify before removal'}
             >
               🍂 {t('deadCode')} ({diag?.totalOrphans || 0})
             </button>
