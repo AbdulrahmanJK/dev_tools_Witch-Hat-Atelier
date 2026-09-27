@@ -1,14 +1,13 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { gzip } from 'node:zlib';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { fork, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import chokidar, { type FSWatcher } from 'chokidar';
-import { type DevToolsTelemetryEvent, type GrimoireGraph, type GraphBuildProgress } from '@wha/core';
+import { ClusterLayout, type DependencySeal, type DevToolsTelemetryEvent, type GrimoireGraph, type GraphBuildProgress } from '@wha/core';
 import { devAdapterScript, quickBrowserScript } from './runtimeScripts.js';
 import { getDevtoolsInstallStatus, installDevtools, refreshDevtools, removeDevtools, upgradeDevtools } from './devtoolsInstaller.js';
 import { detectProjectCapabilities } from './projectCapabilities.js';
@@ -36,10 +35,10 @@ const MIME_TYPES: Record<string, string> = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
 };
-const watchedExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.vue', '.go', '.java', '.kt', '.kts', '.cs']);
+const watchedExtensions = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.vue', '.go', '.java', '.kt', '.kts', '.cs']);
 const ignoredSourceDirectories = new Set(['node_modules', 'build', 'dist', '.git', '.idea', '.dsh', '.grimoire', '.yarn', '.next', '.nuxt', '.output', '.cache', '.turbo', 'coverage', 'storybook-static']);
 
-type BuildMeasurement = { renderedBytes: number; emittedBytesEstimate: number; initial: boolean; chunks: string[]; measuredAt: number; source?: 'vite' | 'webpack-stats'; configuration?: string };
+type BuildMeasurement = { renderedBytes: number; emittedBytesEstimate: number; initial: boolean; chunks: string[]; measuredAt: number; source?: 'vite' | 'webpack-stats'; configuration?: string; appId?: string };
 
 export class GrimoireServer {
   public targetDir: string;
@@ -61,8 +60,14 @@ export class GrimoireServer {
   private scanStatus: { state: 'starting' | 'running' | 'ready' | 'error' | 'cancelled'; phase: string; completed: number | null; total: number | null; file: string | null; startedAt: number; updatedAt: number; error: string | null; coverage?: GrimoireGraph['stats']['parseCoverage']; watchPath?: string | null; logs: Array<{ time: number; level: 'info' | 'warning' | 'error'; message: string }> } = {
     state: 'starting', phase: 'starting', completed: null, total: null, file: null, startedAt: Date.now(), updatedAt: Date.now(), error: null, logs: [],
   };
-  private buildMeasurements = new Map<string, BuildMeasurement>();
+  private buildMeasurementsByApp = new Map<string, Map<string, BuildMeasurement>>();
+  private activeBuildAppId = '';
   private buildInProgress = false;
+  private viteBuildCancel: (() => void) | null = null;
+  private viteBuildTimeout: NodeJS.Timeout | null = null;
+  private viteBuildStatus: { state: 'idle' | 'running' | 'ready' | 'error' | 'cancelled'; appId: string; phase: string; startedAt: number | null; endedAt: number | null; measured: number; error: string | null; logs: string[] } = {
+    state: 'idle', appId: '', phase: 'idle', startedAt: null, endedAt: null, measured: 0, error: null, logs: [],
+  };
   private statsWorker: Worker | null = null;
   private webpackBuildChild: ChildProcessWithoutNullStreams | null = null;
   private webpackBuildTimeout: NodeJS.Timeout | null = null;
@@ -86,6 +91,64 @@ export class GrimoireServer {
 
   private allowsRuntimeOrigin(origin: string | undefined): boolean {
     return !origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || this.allowedRuntimeOrigins.has(origin);
+  }
+
+  private applicationForStats(relativeFile: string): string {
+    const absolute = path.resolve(this.targetDir, relativeFile);
+    const applications = detectProjectCapabilities(this.targetDir).applications;
+    const matches = applications.filter((app) => {
+      const directory = path.resolve(this.targetDir, app.directory);
+      return absolute === directory || absolute.startsWith(directory + path.sep);
+    }).sort((left, right) => right.directory.length - left.directory.length);
+    if (matches[0]?.id !== '.') return matches[0]?.id || '(unassigned)';
+    return applications.length === 1 ? matches[0]?.id || '(unassigned)' : '(unassigned)';
+  }
+
+  private storeBuildMeasurements(appId: string, measurements: Array<[string, BuildMeasurement]>): void {
+    this.buildMeasurementsByApp.set(appId, new Map(measurements.map(([name, value]) => [name, { ...value, appId }])));
+    this.activeBuildAppId = appId;
+  }
+
+  private cacheGraphJson(): void {
+    if (!this.cachedGraph) return;
+    this.cachedGraphJson = JSON.stringify(this.cachedGraph);
+    this.cachedGraphGzip = null;
+    const serializedGraph = this.cachedGraphJson;
+    if (serializedGraph.length > 1_000_000) gzip(serializedGraph, { level: 5 }, (error, compressed) => {
+      if (!error && this.cachedGraphJson === serializedGraph) this.cachedGraphGzip = compressed;
+    });
+  }
+
+  private refreshBuildMeasurements(): void {
+    if (!this.cachedGraph || this.scanWorker) { this.refreshGraph(); return; }
+    const seals: DependencySeal[] = (this.cachedGraph.dependencies || [])
+      .filter((seal) => seal.importCount > 0)
+      .map((seal) => ({ ...seal, build: undefined, buildsByApp: {}, radius: Math.min(44, 24 + Math.sqrt(seal.importerNodeIds.length) * 5) }));
+    const byName = new Map(seals.map((seal) => [seal.name, seal]));
+    for (const [appId, measurements] of this.buildMeasurementsByApp) {
+      for (const [name, measurement] of measurements) {
+        let seal = byName.get(name);
+        if (!seal) {
+          seal = { id: `dependency:${name}`, name, version: null, direct: false, importerNodeIds: [], importCount: 0, dynamicImportCount: 0, sourceRisk: 'unknown', x: 0, y: 0, radius: 24 };
+          seals.push(seal);
+          byName.set(name, seal);
+        }
+        const value = { ...measurement, appId };
+        (seal.buildsByApp ||= {})[appId] = value;
+        if (appId === this.activeBuildAppId) seal.build = value;
+        seal.radius = Math.max(seal.radius, Math.min(62, 24 + Math.sqrt((measurement.emittedBytesEstimate || 0) / 1024) * 3.2));
+      }
+    }
+    const layout = new ClusterLayout();
+    const dependencies = layout.positionDependencies(seals, this.cachedGraph.clusters);
+    this.cachedGraph = {
+      ...this.cachedGraph,
+      dependencies,
+      activeBuildAppId: this.activeBuildAppId,
+      bounds: layout.calculateOverallBounds(this.cachedGraph.nodes, this.cachedGraph.clusters, dependencies),
+    };
+    this.cacheGraphJson();
+    this.notifyClients();
   }
 
   public async start(): Promise<number> {
@@ -119,7 +182,11 @@ export class GrimoireServer {
     this.scanStartedAt = startedAt;
     this.scanStatus = { state: 'running', phase: 'starting', completed: null, total: null, file: null, startedAt, updatedAt: startedAt, error: null, watchPath: this.watcher ? this.scanStatus.watchPath : null, logs: [] };
     this.addScanLog('info', 'Сканирование запущено.');
-    const worker = new Worker(new URL('./scanWorker.js', import.meta.url), { workerData: { targetDir: this.targetDir, buildMeasurements: [...this.buildMeasurements] } });
+    const worker = new Worker(new URL('./scanWorker.js', import.meta.url), { workerData: {
+      targetDir: this.targetDir,
+      buildMeasurementsByApp: [...this.buildMeasurementsByApp].map(([appId, values]) => [appId, [...values]]),
+      activeBuildAppId: this.activeBuildAppId,
+    } });
     this.scanWorker = worker;
     let finished = false;
     let lastTerminalProgress = 0;
@@ -145,12 +212,7 @@ export class GrimoireServer {
         this.cachedGraph.projectRoot = this.targetDir;
         this.cachedGraph.capabilities = detectProjectCapabilities(this.targetDir);
         this.cachedGraph.capabilities.allowedRuntimeOrigins = [...this.allowedRuntimeOrigins];
-        this.cachedGraphJson = JSON.stringify(this.cachedGraph);
-        this.cachedGraphGzip = null;
-        const serializedGraph = this.cachedGraphJson;
-        if (serializedGraph.length > 1_000_000) gzip(serializedGraph, { level: 5 }, (error, compressed) => {
-          if (!error && this.cachedGraphJson === serializedGraph) this.cachedGraphGzip = compressed;
-        });
+        this.cacheGraphJson();
         this.scanStatus = { ...this.scanStatus, state: 'ready', phase: 'ready', coverage: this.cachedGraph.stats.parseCoverage, updatedAt: Date.now() };
         const coverage = this.cachedGraph.stats.parseCoverage;
         if (coverage) this.addScanLog('info', `Покрытие разбора: ${coverage.complete} полных, ${coverage.partial} частичных, ${coverage.unreadable} без чтения; предупреждений ${coverage.warnings}.`);
@@ -392,24 +454,24 @@ export class GrimoireServer {
     }
 
     if (pathname === '/api/build-measure') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      if (req.method === 'GET') { res.end(JSON.stringify(this.viteBuildStatus)); return; }
       const host = req.headers.host || '';
       const origin = req.headers.origin;
-      if (req.method !== 'POST' || (origin && new URL(origin).host !== host)) {
-        res.writeHead(403); res.end('Same-origin POST required'); return;
+      if (!/^localhost:\d+$|^127\.0\.0\.1:\d+$/.test(host) || origin !== `http://${host}`) {
+        res.writeHead(403); res.end(JSON.stringify({ error: 'Same-origin local request required.' })); return;
       }
+      if (req.method === 'DELETE') { this.viteBuildCancel?.(); res.end(JSON.stringify(this.viteBuildStatus)); return; }
+      if (req.method !== 'POST') { res.writeHead(405); res.end(JSON.stringify({ error: 'Method not allowed.' })); return; }
       if (this.buildInProgress || this.statsWorker) { res.writeHead(409); res.end('Build already running'); return; }
       const appId = parsedUrl.searchParams.get('app') || '.';
       const viteApp = detectProjectCapabilities(this.targetDir).applications.find((app) => app.id === appId && app.bundler === 'vite');
       if (!viteApp) { res.writeHead(422, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Выберите обнаруженное Vite-приложение.' })); return; }
-      this.buildInProgress = true;
-      void this.measureViteBuild(path.resolve(this.targetDir, viteApp.directory)).then(() => {
-        this.buildInProgress = false;
-        this.refreshGraph();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ measured: this.buildMeasurements.size }));
+      void this.measureViteBuild(path.resolve(this.targetDir, viteApp.directory), appId).then(() => {
+        this.refreshBuildMeasurements();
+        res.end(JSON.stringify({ measured: this.buildMeasurementsByApp.get(appId)?.size || 0 }));
       }).catch((error) => {
-        this.buildInProgress = false;
-        res.writeHead(422, { 'Content-Type': 'application/json' });
+        res.writeHead(this.viteBuildStatus.state === 'cancelled' ? 409 : 422);
         res.end(JSON.stringify({ error: String(error?.message || error) }));
       });
       return;
@@ -449,24 +511,30 @@ export class GrimoireServer {
       req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8'); if (body.length > 2048) req.destroy(); });
       req.on('end', () => {
         let relativeFile: string;
-        try { relativeFile = String(JSON.parse(body).path || ''); }
+        let compilationId: string | undefined;
+        try {
+          const input = JSON.parse(body);
+          relativeFile = String(input.path || '');
+          compilationId = typeof input.compilation === 'string' && input.compilation.length <= 30 ? input.compilation : undefined;
+        }
         catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Expected JSON path.' })); return; }
         if (relativeFile.length > 1000) { res.writeHead(400); res.end(JSON.stringify({ error: 'Path is too long.' })); return; }
-        const worker = new Worker(new URL('./statsWorker.js', import.meta.url), { workerData: { targetDir: this.targetDir, relativeFile } });
+        const worker = new Worker(new URL('./statsWorker.js', import.meta.url), { workerData: { targetDir: this.targetDir, relativeFile, compilationId } });
         this.statsWorker = worker;
         let replied = false;
-        const fail = (error: string) => {
+        const fail = (error: string, compilations?: Array<{ id: string; name: string; target: string }>) => {
           if (replied) return;
           replied = true;
-          res.writeHead(422); res.end(JSON.stringify({ error }));
+          res.writeHead(422); res.end(JSON.stringify({ error, compilations }));
         };
-        worker.on('message', (message: { measurements?: Array<[string, BuildMeasurement]>; error?: string }) => {
-          if (message.error) { fail(message.error); return; }
+        worker.on('message', (message: { measurements?: Array<[string, BuildMeasurement]>; error?: string; compilations?: Array<{ id: string; name: string; target: string }> }) => {
+          if (message.error) { fail(message.error, message.compilations); return; }
           if (!message.measurements || replied) return;
           replied = true;
-          this.buildMeasurements = new Map(message.measurements.map(([name, value]) => [name, { ...value, configuration: relativeFile }]));
-          this.refreshGraph();
-          res.end(JSON.stringify({ measured: this.buildMeasurements.size }));
+          const appId = this.applicationForStats(relativeFile);
+          this.storeBuildMeasurements(appId, message.measurements.map(([name, value]) => [name, value]));
+          this.refreshBuildMeasurements();
+          res.end(JSON.stringify({ measured: message.measurements.length, appId }));
         });
         worker.on('error', (error) => fail(error instanceof Error ? error.message : String(error)));
         worker.on('exit', (code) => { if (this.statsWorker === worker) this.statsWorker = null; if (!replied) fail(`Stats worker exited with code ${code}.`); });
@@ -499,7 +567,7 @@ export class GrimoireServer {
           const incoming = JSON.parse(body) as DevToolsTelemetryEvent | DevToolsTelemetryEvent[];
           const inputs = Array.isArray(incoming) ? incoming : [incoming];
           if (inputs.length === 0 || inputs.length > 50) throw new Error('Invalid telemetry batch');
-          const types = ['RENDER', 'STATE_MUTATION', 'EFFECT_TRIGGER', 'DOM_UPDATE', 'LONG_TASK', 'INTERACTION', 'LOCATE', 'HELLO'];
+          const types = ['RENDER', 'STATE_MUTATION', 'EFFECT_TRIGGER', 'DOM_UPDATE', 'LONG_TASK', 'INTERACTION', 'LOCATE', 'HELLO', 'LOSS'];
           const reactive = (value: unknown) => Array.isArray(value) ? value.slice(0, 24).map((entry: any) => ({
             targetId: String(entry?.targetId || '').slice(0, 80), key: String(entry?.key || '').slice(0, 80), operation: String(entry?.operation || '').slice(0, 30),
           })).filter((entry) => entry.targetId && entry.key) : undefined;
@@ -523,6 +591,8 @@ export class GrimoireServer {
               reactiveTracked: reactive(input.reactiveTracked), reactiveTriggers: reactive(input.reactiveTriggers),
               timestamp: Number.isFinite(input.timestamp) ? input.timestamp : Date.now(),
               durationMs: Math.max(0, Math.min(input.durationMs, 60000)),
+              droppedCount: input.type === 'LOSS' && Number.isSafeInteger(input.droppedCount)
+                ? Math.max(0, Math.min(input.droppedCount!, 1_000_000_000)) : undefined,
               changeReasons: Array.isArray(input.changeReasons) ? input.changeReasons.slice(0, 6).map((reason) => String(reason).slice(0, 160)) : [],
             };
           });
@@ -771,10 +841,10 @@ export class GrimoireServer {
         if (finished || this.webpackBuildStatus.state !== 'importing') return;
         finished = true;
         if (message.error || !message.measurements) { this.finishWebpackBuild('error', message.error || 'Не удалось прочитать Webpack stats.'); return; }
-        this.buildMeasurements = new Map(message.measurements.map(([name, value]) => [name, { ...value, configuration: `${appId}:${script}:${relativeFile}` }]));
-        this.webpackBuildStatus.measured = this.buildMeasurements.size;
+        this.storeBuildMeasurements(appId, message.measurements.map(([name, value]) => [name, { ...value, configuration: `${appId}:${script}:${value.configuration || relativeFile}` }]));
+        this.webpackBuildStatus.measured = message.measurements.length;
         this.finishWebpackBuild('ready');
-        this.refreshGraph();
+        this.refreshBuildMeasurements();
       });
       worker.on('error', (error) => { if (generation === this.webpackBuildGeneration && !finished && this.webpackBuildStatus.state === 'importing') this.finishWebpackBuild('error', error instanceof Error ? error.message : String(error)); });
       worker.on('exit', (exitCode) => {
@@ -786,61 +856,84 @@ export class GrimoireServer {
     });
   }
 
-  private async measureViteBuild(appDirectory: string): Promise<void> {
-    const requireFromTarget = createRequire(path.join(appDirectory, 'package.json'));
-    let vitePath: string;
-    try {
-      const manifestPath = requireFromTarget.resolve('vite/package.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const entry = manifest.exports?.['.']?.import || manifest.module || manifest.main;
-      vitePath = entry ? path.resolve(path.dirname(manifestPath), entry) : requireFromTarget.resolve('vite');
-    }
-    catch { throw new Error('Vite is not installed in the target project. Build measurement currently supports Vite.'); }
-    const viteModule = await import(pathToFileURL(vitePath).href);
-    const vite = viteModule.build ? viteModule : viteModule.default;
-    if (typeof vite.build !== 'function') throw new Error('Cannot load the target Vite build API.');
-    const measurements = new Map<string, BuildMeasurement>();
-    const measuredAt = Date.now();
+  private measureViteBuild(appDirectory: string, appId: string): Promise<void> {
     const configuration = path.relative(this.targetDir, appDirectory).replace(/\\/g, '/') || '.';
-    const plugin = {
-      name: 'grimoire-dependency-measurement',
-      generateBundle(_options: unknown, bundle: Record<string, any>) {
-        const initialChunks = new Set<string>();
-        const visit = (chunkName: string) => {
-          if (initialChunks.has(chunkName)) return;
-          initialChunks.add(chunkName);
-          const chunk = bundle[chunkName];
-          if (chunk?.type === 'chunk') for (const imported of chunk.imports || []) visit(imported);
-        };
-        for (const [chunkName, output] of Object.entries(bundle)) {
-          if (output.type === 'chunk' && output.isEntry) visit(chunkName);
+    this.buildInProgress = true;
+    this.viteBuildStatus = { state: 'running', appId, phase: 'starting', startedAt: Date.now(), endedAt: null,
+      measured: 0, error: null, logs: ['Starting Vite measurement in a separate process.'] };
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      let termination: { state: 'cancelled' | 'error'; message: string } | null = null;
+      let completedMeasurements: Array<[string, BuildMeasurement]> | null = null;
+      let child: ChildProcess;
+      try {
+        child = fork(fileURLToPath(new URL('./viteBuildWorker.js', import.meta.url)), [], {
+          cwd: appDirectory, silent: true,
+          env: { ...process.env, GRIMOIRE_VITE_APP_DIRECTORY: appDirectory, GRIMOIRE_VITE_CONFIGURATION: configuration },
+        });
+      } catch (error) {
+        this.buildInProgress = false;
+        this.viteBuildStatus = { ...this.viteBuildStatus, state: 'error', phase: 'error', endedAt: Date.now(), error: String(error) };
+        reject(error);
+        return;
+      }
+      const log = (message: string) => {
+        const lines = message.trim().split(/\r?\n/).filter(Boolean).map((line) => line.slice(0, 500));
+        this.viteBuildStatus.logs = [...this.viteBuildStatus.logs, ...lines].slice(-60);
+      };
+      const finish = (state: 'ready' | 'error' | 'cancelled', error?: string) => {
+        if (finished) return;
+        finished = true;
+        if (this.viteBuildTimeout) clearTimeout(this.viteBuildTimeout);
+        this.viteBuildTimeout = null;
+        this.viteBuildCancel = null;
+        this.buildInProgress = false;
+        this.viteBuildStatus = { ...this.viteBuildStatus, state, phase: state, endedAt: Date.now(), error: error || null,
+          measured: state === 'ready' ? this.buildMeasurementsByApp.get(appId)?.size || 0 : 0 };
+        if (state === 'ready') resolve();
+        else reject(new Error(error || (state === 'cancelled' ? 'Vite measurement cancelled.' : 'Vite measurement failed.')));
+      };
+      const stop = (reason: 'cancelled' | 'error', message: string) => {
+        if (finished || termination) return;
+        termination = { state: reason, message };
+        log(message);
+        this.viteBuildStatus = { ...this.viteBuildStatus, state: reason, phase: 'stopping', error: message };
+        child.kill('SIGTERM');
+        const force = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 5000);
+        force.unref();
+      };
+      this.viteBuildCancel = () => stop('cancelled', 'Measurement stopped by the user.');
+      this.viteBuildTimeout = setTimeout(() => stop('error', 'Vite measurement exceeded the 15 minute limit.'), 15 * 60 * 1000);
+      child.stdout?.on('data', (chunk: Buffer) => log(chunk.toString('utf8')));
+      child.stderr?.on('data', (chunk: Buffer) => log(chunk.toString('utf8')));
+      child.on('message', (message: { type?: string; phase?: string; message?: string; error?: string; measurements?: Array<[string, BuildMeasurement]> }) => {
+        if (finished || termination) return;
+        if (message.type === 'progress') {
+          this.viteBuildStatus.phase = message.phase || 'building';
+          if (message.message) log(message.message);
+        } else if (message.type === 'error') {
+          if (message.error) log(message.error);
+          finish('error', message.error || 'Vite measurement failed.');
+        } else if (message.type === 'complete' && message.measurements) {
+          completedMeasurements = message.measurements;
+          this.viteBuildStatus.phase = 'finalizing';
         }
-        for (const [chunkName, output] of Object.entries(bundle)) {
-          if (output.type !== 'chunk') continue;
-          const modules = Object.entries(output.modules || {}) as Array<[string, { renderedLength?: number }]>;
-          const totalRendered = modules.reduce((sum, [, details]) => sum + (details.renderedLength || 0), 0);
-          const emittedChunkBytes = Buffer.byteLength(output.code || '', 'utf8');
-          for (const [moduleId, details] of modules) {
-            const normalized = moduleId.replace(/\\/g, '/');
-            const match = normalized.match(/\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?((?:@[^/]+\/)?[^/]+)/);
-            if (!match) continue;
-            const name = match[1]!;
-            const value: BuildMeasurement = measurements.get(name) || { renderedBytes: 0, emittedBytesEstimate: 0, initial: false, chunks: [], measuredAt, source: 'vite', configuration };
-            value.renderedBytes += details.renderedLength || 0;
-            value.emittedBytesEstimate += totalRendered ? emittedChunkBytes * (details.renderedLength || 0) / totalRendered : 0;
-            value.initial ||= initialChunks.has(chunkName);
-            if (!value.chunks.includes(chunkName)) value.chunks.push(chunkName);
-            measurements.set(name, value);
-          }
+      });
+      child.on('error', (error) => finish('error', error.message));
+      child.on('exit', (code, signal) => {
+        if (termination) finish(termination.state, termination.message);
+        else if (code === 0 && completedMeasurements) {
+          this.storeBuildMeasurements(appId, completedMeasurements);
+          finish('ready');
         }
-      },
-    };
-    await vite.build({ root: appDirectory, plugins: [plugin] });
-    this.buildMeasurements = measurements;
+        else if (!finished) finish('error', `Vite measurement exited before completion (${code ?? signal}).`);
+      });
+    });
   }
 
   public close(): void {
     this.scanGeneration++;
+    this.viteBuildCancel?.();
     this.stopWebpackBuild();
     this.scanWorker?.terminate();
     this.scanWorker = null;

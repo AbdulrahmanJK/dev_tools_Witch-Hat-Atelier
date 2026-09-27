@@ -3,6 +3,12 @@ import path from 'node:path';
 import type { DependencySeal } from '@wha/core';
 
 export type LibraryMeasurement = NonNullable<DependencySeal['build']>;
+export interface WebpackCompilationChoice { id: string; name: string; target: string; }
+export class WebpackCompilationSelectionError extends Error {
+  constructor(public readonly compilations: WebpackCompilationChoice[]) {
+    super('Stats содержит несколько компиляций. Выберите браузерную компиляцию и повторите импорт.');
+  }
+}
 
 function packageName(identifier: string): string | null {
   const normalized = identifier.replace(/\\/g, '/').split('?')[0] || '';
@@ -10,7 +16,7 @@ function packageName(identifier: string): string | null {
   return match?.[1] || null;
 }
 
-export function importWebpackStats(targetDir: string, relativeFile: string): Map<string, LibraryMeasurement> {
+export function importWebpackStats(targetDir: string, relativeFile: string, compilationId?: string): Map<string, LibraryMeasurement> {
   if (!relativeFile || path.isAbsolute(relativeFile) || relativeFile.split(/[\\/]/).includes('..')) {
     throw new Error('Укажите относительный путь к stats.json внутри проекта.');
   }
@@ -23,11 +29,29 @@ export function importWebpackStats(targetDir: string, relativeFile: string): Map
   const size = fs.statSync(realFile).size;
   if (size > 120 * 1024 * 1024) throw new Error('Файл stats больше 120 МБ. Создайте stats с сокращённым набором полей.');
   const stats = JSON.parse(fs.readFileSync(realFile, 'utf8')) as Record<string, any>;
-  const outputs = Array.isArray(stats.children) && stats.children.length ? stats.children : [stats];
+  const outputs: Array<{ output: Record<string, any>; choice: WebpackCompilationChoice }> = [];
+  const collect = (output: Record<string, any>, prefix: string): void => {
+    const children = Array.isArray(output.children) ? output.children : [];
+    if (!children.length || (output.modules?.length && output.chunks?.length && output.assets?.length)) {
+      const target = Array.isArray(output.target) ? output.target.join(', ') : String(output.target || 'unknown');
+      outputs.push({ output, choice: { id: prefix || '0', name: String(output.name || output.outputPath || `Compilation ${prefix || '0'}`), target } });
+    }
+    children.forEach((child: Record<string, any>, index: number) => collect(child, prefix ? `${prefix}.${index}` : String(index)));
+  };
+  collect(stats, '');
+  const chosen = compilationId == null || compilationId === '' ? (() => {
+    if (outputs.length === 1) return outputs[0];
+    const browser = outputs.filter(({ choice }) => /\b(?:web|webworker|browser|electron-renderer)\b/i.test(choice.target));
+    return browser.length === 1 ? browser[0] : undefined;
+  })() : outputs.find(({ choice }) => choice.id === compilationId);
+  if (!chosen) {
+    if (compilationId) throw new Error(`Компиляция ${compilationId} не найдена в stats.`);
+    throw new WebpackCompilationSelectionError(outputs.map(({ choice }) => choice));
+  }
   const measuredAt = Date.now();
   const result = new Map<string, LibraryMeasurement>();
 
-  for (const output of outputs) {
+  for (const output of [chosen.output]) {
     const assets = new Map<string, number>();
     for (const asset of output.assets || []) if (typeof asset.name === 'string' && Number.isFinite(asset.size)) assets.set(asset.name, asset.size);
     const entryChunkIds = new Set<string>();
@@ -76,5 +100,6 @@ export function importWebpackStats(targetDir: string, relativeFile: string): Map
     }
   }
   if (!result.size) throw new Error('В Webpack stats нет модулей библиотек с привязкой к чанкам. Нужны поля modules, chunks и assets.');
+  for (const measurement of result.values()) measurement.configuration = `${relativeFile}#${chosen.choice.id}`;
   return result;
 }

@@ -7,8 +7,66 @@ function ensureGrimoireBrowserSupport(endpoint) {
   const context = { pageId, lastInteraction: null, locate: false, source: 'browser', framework: null, heartbeat: null };
   globalThis.__grimoireBrowserContext = context;
   const control = endpoint.replace(/\/api\/telemetry(?:\?.*)?$/, '/api/runtime/control');
-  const send = (event) => fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pageId, source: 'browser', timestamp: Date.now(), durationMs: 0, ...event }), keepalive: true }).catch(() => {});
+  const pending = [];
+  let sending = false;
+  let timer = null;
+  let retryDelay = 100;
+  let pendingLoss = 0;
+  let lastWarning = 0;
+  function schedule(delay) { if (timer === null) timer = setTimeout(flush, delay); }
+  function enforceQueueLimit() {
+    if (pending.length <= 10000) return;
+    const lost = pending.splice(0, pending.length - 10000).length;
+    pendingLoss += lost;
+    console.error('[Grimoire] Browser telemetry queue overflow: ' + lost + ' events lost.');
+  }
+  async function flush() {
+    timer = null;
+    if (sending || (!pending.length && !pendingLoss)) return;
+    sending = true;
+    const batch = pending.splice(0, 20);
+    const reportedLoss = pendingLoss;
+    try {
+      const body = JSON.stringify(reportedLoss ? [{ type: 'LOSS', source: context.source, framework: context.framework,
+        componentName: 'Telemetry delivery', pageId, timestamp: Date.now(), durationMs: 0, droppedCount: reportedLoss }, ...batch] : batch);
+      const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      pendingLoss = Math.max(0, pendingLoss - reportedLoss);
+      retryDelay = 100;
+    } catch (error) {
+      pending.unshift(...batch);
+      enforceQueueLimit();
+      retryDelay = Math.min(5000, retryDelay * 2);
+      if (Date.now() - lastWarning > 10000) {
+        lastWarning = Date.now();
+        console.warn('[Grimoire] Browser telemetry delivery failed; retrying ' + pending.length + ' events.', error);
+      }
+    } finally {
+      sending = false;
+      if (pending.length || pendingLoss) schedule(retryDelay === 100 ? 8 : retryDelay);
+    }
+  }
+  const send = (event) => {
+    pending.push({ pageId, source: 'browser', timestamp: Date.now(), durationMs: 0, ...event });
+    enforceQueueLimit();
+    schedule(8);
+  };
+  context.send = send;
+  const pagehide = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    while (pending.length || pendingLoss) {
+      const batch = pending.splice(0, 20);
+      if (pendingLoss) { batch.unshift({ type: 'LOSS', source: context.source, framework: context.framework,
+        componentName: 'Telemetry delivery', pageId, timestamp: Date.now(), durationMs: 0, droppedCount: pendingLoss }); pendingLoss = 0; }
+      const body = JSON.stringify(batch);
+      if (!navigator.sendBeacon?.(endpoint, new Blob([body], { type: 'application/json' }))) {
+        fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+          .catch((error) => console.warn('[Grimoire] Final browser telemetry delivery failed.', error));
+      }
+    }
+  };
+  addEventListener('pagehide', pagehide, { once: true });
   const announce = () => send({ type: 'HELLO', componentName: 'Runtime connection', source: context.source, framework: context.framework });
   context.setMode = (source, framework) => {
     const rank = { browser: 0, adapter: 1, fiber: 2 };
@@ -82,7 +140,8 @@ function ensureGrimoireBrowserSupport(endpoint) {
   const controlStream = new EventSource(control + '-stream');
   controlStream.onmessage = (event) => { try { context.locate = Boolean(JSON.parse(event.data).locate); } catch {} };
   controlStream.onerror = () => { context.locate = false; };
-  context.stop = () => { clearInterval(context.heartbeat); controlStream.close(); observers.forEach((observer) => observer.disconnect());
+  context.stop = () => { pagehide(); clearInterval(context.heartbeat); controlStream.close(); observers.forEach((observer) => observer.disconnect());
+    removeEventListener('pagehide', pagehide); if (timer !== null) clearTimeout(timer);
     document.removeEventListener('click', click, true); document.removeEventListener('keydown', keydown, true);
     delete globalThis.__grimoireBrowserContext; };
   return context;
@@ -116,7 +175,7 @@ export const quickBrowserScript = `(() => {
     return null;
   }
   function send(event) {
-    fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: browserContext.pageId, ...event }), keepalive: true }).catch(() => {});
+    browserContext.send(event);
   }
   const observer = new MutationObserver((records) => {
     for (const record of records) {
@@ -149,12 +208,13 @@ function getBrowserContext() {
 }
 function send(event) {
   const context = getBrowserContext();
+  if (!context) return;
   const recent = context?.lastInteraction;
-  fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...event, source: 'adapter',
+  context.send({ ...event, source: 'adapter', framework: context.framework,
     pageId: context?.pageId, interactionType: recent && Date.now() - recent.timestamp < 1000 ? recent.type : undefined,
     interactionId: recent && Date.now() - recent.timestamp < 1000 ? recent.interactionId : undefined,
     interactionTarget: recent && Date.now() - recent.timestamp < 1000 ? recent.target : undefined,
-    timestamp: Date.now() }), keepalive: true }).catch(() => {});
+    timestamp: Date.now() });
 }
 
 /** Vue 3: install once before mount. Measures each component's update phase in dev. */
@@ -268,15 +328,58 @@ if (active && !globalThis.__grimoireFiberHookActive) {
   const runtimeIds = new WeakMap();
   const pendingEvents = [];
   let flushTimer = null;
-  function flushTelemetry() {
+  let flushing = false;
+  let retryDelay = 100;
+  let lastWarning = 0;
+  let pendingLoss = 0;
+  function enforceQueueLimit() {
+    if (pendingEvents.length <= 10000) return;
+    const dropped = pendingEvents.splice(0, pendingEvents.length - 10000).length;
+    pendingLoss += dropped;
+    console.error('[Grimoire] Telemetry queue overflow: ' + dropped + ' oldest events were lost.');
+  }
+  function lossEvent(count) {
+    return { type: 'LOSS', source: 'fiber', framework: 'react', componentName: 'Telemetry delivery',
+      pageId: browserContext.pageId, timestamp: Date.now(), durationMs: 0, droppedCount: count };
+  }
+  async function flushTelemetry() {
     flushTimer = null;
-    const events = pendingEvents.splice(0, pendingEvents.length);
-    for (let offset = 0; offset < events.length; offset += 50) {
-      fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(events.slice(offset, offset + 50)), keepalive: true }).catch(() => {});
+    if (flushing || (!pendingEvents.length && !pendingLoss)) return;
+    flushing = true;
+    const batch = pendingEvents.splice(0, 20);
+    const reportedLoss = pendingLoss;
+    try {
+      const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reportedLoss ? [lossEvent(reportedLoss), ...batch] : batch), keepalive: true });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      pendingLoss = Math.max(0, pendingLoss - reportedLoss);
+      retryDelay = 100;
+    } catch (error) {
+      pendingEvents.unshift(...batch);
+      enforceQueueLimit();
+      retryDelay = Math.min(5000, retryDelay * 2);
+      if (Date.now() - lastWarning > 10000) {
+        lastWarning = Date.now();
+        console.warn('[Grimoire] Telemetry delivery failed; retrying ' + pendingEvents.length + ' events.', error);
+      }
+    } finally {
+      flushing = false;
+      if ((pendingEvents.length || pendingLoss) && flushTimer === null) flushTimer = setTimeout(flushTelemetry, retryDelay === 100 ? 8 : retryDelay);
     }
   }
-  addEventListener('pagehide', flushTelemetry, { once: true });
+  addEventListener('pagehide', () => {
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = null;
+    while (pendingEvents.length || pendingLoss) {
+      const batch = pendingEvents.splice(0, 20);
+      if (pendingLoss) { batch.unshift(lossEvent(pendingLoss)); pendingLoss = 0; }
+      const body = JSON.stringify(batch);
+      if (!navigator.sendBeacon?.(endpoint, new Blob([body], { type: 'application/json' }))) {
+        fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+          .catch((error) => console.warn('[Grimoire] Final telemetry delivery failed.', error));
+      }
+    }
+  }, { once: true });
   function runtimeIdOf(fiber) {
     if (!fiber) return undefined;
     let id = runtimeIds.get(fiber) || (fiber.alternate && runtimeIds.get(fiber.alternate));
@@ -321,11 +424,12 @@ if (active && !globalThis.__grimoireFiberHookActive) {
     const events = [];
     const id = ++commitId;
     const stack = [{ fiber: current, path: [], parentRuntimeId: undefined }];
-    let visited = 0;
-    while (stack.length && visited++ < 15000) {
+    const visited = new Set();
+    while (stack.length) {
       const item = stack.pop();
       const fiber = item.fiber;
-      if (!fiber) continue;
+      if (!fiber || visited.has(fiber)) continue;
+      visited.add(fiber);
       const isComponent = compositeTags.has(fiber.tag);
       const name = isComponent ? nameOf(fiber) : null;
       const runtimeId = name ? runtimeIdOf(fiber) : undefined;
@@ -341,7 +445,7 @@ if (active && !globalThis.__grimoireFiberHookActive) {
         }
         const recent = browserContext.lastInteraction;
         const type = fiber.elementType || fiber.type;
-        events.push({ type: 'RENDER', source: 'fiber', componentName: name,
+        events.push({ type: 'RENDER', source: 'fiber', framework: 'react', componentName: name,
           pageId: browserContext.pageId, runtimeId, parentRuntimeId: item.parentRuntimeId,
           file: type?.__file || type?.type?.__file,
           parentComponentName: item.path[item.path.length - 1], hierarchyPath: path,
@@ -353,16 +457,27 @@ if (active && !globalThis.__grimoireFiberHookActive) {
           changeReasons: reasons });
       }
       if (fiber.sibling) stack.push({ fiber: fiber.sibling, path: item.path, parentRuntimeId: item.parentRuntimeId });
-      if (fiber.child) stack.push({ fiber: fiber.child, path, parentRuntimeId: runtimeId || item.parentRuntimeId });
+      // React 18/19 bubble commit flags through subtreeFlags. A settled branch
+      // cannot contain an event that this observer would report. React 17 and
+      // renderers without this field retain the full walk.
+      const subtreeFlags = fiber.subtreeFlags;
+      if (fiber.child && (!fiber.alternate || typeof subtreeFlags !== 'number' || subtreeFlags !== 0
+        || ((fiber.child.flags ?? fiber.child.effectTag ?? 0) & 1))) {
+        stack.push({ fiber: fiber.child, path, parentRuntimeId: runtimeId || item.parentRuntimeId });
+      }
     }
     if (events.length) {
       pendingEvents.push(...events);
+      enforceQueueLimit();
       if (flushTimer === null) flushTimer = setTimeout(flushTelemetry, 8);
     }
   }
   function onCommit(root) {
     const current = root?.current;
-    if (current) queueMicrotask(() => { try { capture(current); } catch {} });
+    if (current) queueMicrotask(() => {
+      try { capture(current); }
+      catch (error) { console.warn('[Grimoire] React commit capture failed:', error); }
+    });
   }
   try {
     let hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
