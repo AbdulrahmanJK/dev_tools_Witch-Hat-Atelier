@@ -13,10 +13,13 @@ export function parseFileToAst(filePath: string): ParseResult {
   try {
     code = fs.readFileSync(filePath, 'utf8');
     const isTypeScript = /\.[cm]?tsx?$/.test(filePath);
-    const isJsx = /\.[cm]?[jt]sx$/.test(filePath);
+    const isDeclaration = /\.d\.[cm]?ts$/.test(filePath);
+    // React projects commonly keep JSX in plain .js files. Keep TypeScript's
+    // non-TSX grammar for .ts/.mts/.cts to avoid misreading generic syntax.
+    const isJsx = /\.(?:[cm]?jsx?|tsx)$/.test(filePath);
     const plugins: ParserPlugin[] = [
       ...(isJsx ? ['jsx' as ParserPlugin] : []),
-      ...(isTypeScript ? ['typescript' as ParserPlugin] : []),
+      ...(isTypeScript ? [['typescript', { dts: isDeclaration }] as ParserPlugin] : []),
       'classProperties',
       'classPrivateProperties',
       'classPrivateMethods',

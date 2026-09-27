@@ -1,5 +1,6 @@
 export * from './types/index.js';
 export * from './scanner/aliasResolver.js';
+export * from './scanner/workspaceDiscovery.js';
 export * from './scanner/astParser.js';
 export * from './scanner/detector.js';
 export * from './scanner/vueDetector.js';

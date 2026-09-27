@@ -99,6 +99,7 @@ export class ClusterLayout {
     return {
       nodes: layoutNodes,
       edges,
+      files: graph.files,
       clusters: layoutClusters,
       dependencies,
       bounds: this.calculateOverallBounds(layoutNodes, layoutClusters, dependencies),
@@ -109,19 +110,15 @@ export class ClusterLayout {
 
   /** Reuse information is useful on the ordinary map and in the inspector. */
   private populateSharedHubs(nodes: SealNode[], edges: SealEdge[]): void {
-    const root = nodes.find((node) => node.name === 'App' || node.cluster?.includes('Root'));
     const consumers = new Map(nodes.map((node) => [node.id, new Set<string>()]));
-    const uniqueNames = new Map<string, SealNode>();
-    for (const node of nodes) if (!uniqueNames.has(node.name)) uniqueNames.set(node.name, node);
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
     for (const edge of edges) {
-      if (edge.source !== root?.id && edge.source !== edge.target) consumers.get(edge.target)?.add(edge.source);
-    }
-    for (const parent of nodes) {
-      if (parent.id === root?.id) continue;
-      for (const name of parent.children || []) {
-        const child = uniqueNames.get(name);
-        if (child && child.id !== parent.id) consumers.get(child.id)?.add(parent.id);
-      }
+      if (edge.source === edge.target) continue;
+      const target = nodeById.get(edge.target);
+      if (!target) continue;
+      // Importing a component file does not prove that the component renders.
+      if (target.kind === 'component' ? edge.type !== 'render' : edge.type !== 'import') continue;
+      consumers.get(edge.target)?.add(edge.source);
     }
     for (const node of nodes) {
       node.consumers = [...(consumers.get(node.id) || [])];
@@ -130,7 +127,7 @@ export class ClusterLayout {
     }
   }
 
-  private positionDependencies(dependencies: DependencySeal[], clusters: ArchipelagoCluster[]): DependencySeal[] {
+  public positionDependencies(dependencies: DependencySeal[], clusters: ArchipelagoCluster[]): DependencySeal[] {
     if (!dependencies.length) return [];
     const outer = Math.max(420, ...clusters.map((cluster) => Math.hypot(cluster.x, cluster.y) + cluster.radius));
     const circumference = dependencies.reduce((sum, seal) => sum + seal.radius * 2 + 45, 0);
@@ -431,7 +428,7 @@ export class ClusterLayout {
     };
   }
 
-  private calculateOverallBounds(
+  public calculateOverallBounds(
     nodes: SealNode[],
     clusters: ArchipelagoCluster[],
     dependencies: DependencySeal[]

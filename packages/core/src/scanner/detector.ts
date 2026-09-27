@@ -62,6 +62,8 @@ export interface DetectedEntities {
     }>;
     line?: number;
     dynamic?: boolean;
+    glob?: boolean;
+    context?: { recursive: boolean; pattern?: string; flags?: string };
   }>;
   components: DetectedComponent[];
   hooksDefined: DetectedHook[];
@@ -83,8 +85,8 @@ export interface DetectedEntities {
 // not become invented components.
 export function detectPartialFileEntities(code: string, filePath: string): DetectedEntities {
   const result = detectFileEntities(null, code, filePath);
-  const kind = /\.tsx$/.test(filePath) ? ts.ScriptKind.TSX : /\.jsx$/.test(filePath) ? ts.ScriptKind.JSX
-    : /\.tsx?$/.test(filePath) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+  const kind = /\.[cm]?tsx$/.test(filePath) ? ts.ScriptKind.TSX : /\.[cm]?jsx$/.test(filePath) ? ts.ScriptKind.JSX
+    : /\.[cm]?ts$/.test(filePath) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const ast = ts.createSourceFile(filePath, code, ts.ScriptTarget.Latest, false, kind);
   const line = (node: ts.Node) => ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1;
   const addImport = (source: string, names: string[], node: ts.Node) => {
@@ -178,9 +180,34 @@ export function detectFileEntities(ast: any, _code: string, _filePath: string): 
       if (path.node.source?.value) imports.push({ source: path.node.source.value, specifiers: [], line: path.node.loc?.start?.line });
     },
     CallExpression(path: any) {
+      const callee = path.node.callee;
+      if (callee?.type === 'MemberExpression' && callee.object?.type === 'MetaProperty'
+        && callee.object.meta?.name === 'import' && callee.object.property?.name === 'meta'
+        && ['glob', 'globEager'].includes(callee.property?.name)) {
+        const pattern = path.node.arguments[0];
+        const patterns = pattern?.type === 'ArrayExpression' ? pattern.elements : [pattern];
+        for (const item of patterns) if (item?.type === 'StringLiteral' && !item.value.startsWith('!')) {
+          imports.push({ source: item.value, specifiers: [], line: path.node.loc?.start?.line, dynamic: true, glob: true });
+        }
+      }
+      if (callee?.type === 'MemberExpression' && callee.object?.name === 'require'
+        && callee.property?.name === 'context' && path.node.arguments[0]?.type === 'StringLiteral') {
+        const expression = path.node.arguments[2];
+        imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line,
+          context: { recursive: path.node.arguments[1]?.value !== false,
+            pattern: expression?.type === 'RegExpLiteral' ? expression.pattern : undefined,
+            flags: expression?.type === 'RegExpLiteral' ? expression.flags : undefined } });
+      }
       if (path.node.callee?.type === 'Import' && path.node.arguments[0]?.type === 'StringLiteral') {
         imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line, dynamic: true });
       } else if (path.node.callee?.name === 'require' && path.node.arguments[0]?.type === 'StringLiteral') {
+        imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line });
+      }
+    },
+    NewExpression(path: any) {
+      if (path.node.callee?.name === 'URL' && path.node.arguments[0]?.type === 'StringLiteral'
+        && path.node.arguments[1]?.type === 'MemberExpression'
+        && path.node.arguments[1].object?.type === 'MetaProperty') {
         imports.push({ source: path.node.arguments[0].value, specifiers: [], line: path.node.loc?.start?.line });
       }
     },

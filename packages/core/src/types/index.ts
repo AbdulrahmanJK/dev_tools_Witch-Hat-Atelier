@@ -56,7 +56,9 @@ export interface DependencySeal {
     measuredAt: number;
     source?: 'vite' | 'webpack-stats';
     configuration?: string;
+    appId?: string;
   };
+  buildsByApp?: Record<string, NonNullable<DependencySeal['build']>>;
   runtime?: { selfTimeMs: number; sampleCount: number };
   x: number;
   y: number;
@@ -212,6 +214,7 @@ export interface ArchitectureViolation {
 export interface RawGraphData {
   nodes: SealNode[];
   edges: SealEdge[];
+  files?: SourceFileRecord[];
   clusters: Array<{ name: string; nodeIds: string[]; count: number }>;
   stats: GrimoireGraph['stats'];
   diagnostics?: DiagnosticsSummary;
@@ -227,6 +230,17 @@ export interface SealEdge {
   _key2?: string;
   isCircular?: boolean;
   isArchitectureViolation?: boolean;
+  sourceFile?: string;
+  targetFile?: string;
+}
+
+export interface SourceFileRecord {
+  path: string;
+  nodeIds: string[];
+  parseMode: 'complete' | 'partial' | 'unreadable';
+  parseError?: string;
+  unresolvedImports: Array<{ source: string; line: number }>;
+  excludedImports?: Array<{ source: string; line: number }>;
 }
 
 export interface ArchipelagoCluster {
@@ -242,9 +256,11 @@ export interface ArchipelagoCluster {
 export interface GrimoireGraph {
   projectKey?: string;
   projectRoot?: string;
+  activeBuildAppId?: string;
   capabilities?: ProjectCapabilities;
   nodes: SealNode[];
   edges: SealEdge[];
+  files?: SourceFileRecord[];
   clusters: ArchipelagoCluster[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   stats: {
@@ -253,6 +269,9 @@ export interface GrimoireGraph {
     totalClusters: number;
     totalFiles: number;
     locTotal: number;
+    unresolvedImportCount?: number;
+    excludedImportCount?: number;
+    discoveryIssues?: Array<{ path: string; error: string }>;
     parseCoverage?: { complete: number; partial: number; unreadable: number; warnings: number; cached?: number };
   };
   diagnostics?: DiagnosticsSummary;
@@ -280,7 +299,7 @@ export interface ProjectCapabilities {
 }
 
 export interface DevToolsTelemetryEvent {
-  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER' | 'DOM_UPDATE' | 'LONG_TASK' | 'INTERACTION' | 'LOCATE' | 'HELLO';
+  type: 'RENDER' | 'STATE_MUTATION' | 'EFFECT_TRIGGER' | 'DOM_UPDATE' | 'LONG_TASK' | 'INTERACTION' | 'LOCATE' | 'HELLO' | 'LOSS';
   source?: 'browser' | 'adapter' | 'fiber';
   framework?: 'react' | 'vue';
   componentName: string;
@@ -300,5 +319,6 @@ export interface DevToolsTelemetryEvent {
   file?: string;
   timestamp: number;
   durationMs: number;
+  droppedCount?: number;
   changeReasons?: string[];
 }

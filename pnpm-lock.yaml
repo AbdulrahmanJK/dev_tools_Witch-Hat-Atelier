@@ -85,6 +85,9 @@ importers:
       '@babel/traverse':
         specifier: ^7.26.9
         version: 7.29.8
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       vue:
         specifier: 3.5.31
         version: 3.5.31(typescript@5.9.3)
@@ -92,9 +95,6 @@ importers:
       '@types/babel__traverse':
         specifier: ^7.28.0
         version: 7.28.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   packages/vscode-extension:
     dependencies:

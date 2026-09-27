@@ -112,6 +112,24 @@ export function detectVueFileEntities(fileContent: string, filePath: string): De
           if (p.node.source?.value) imports.push({ source: p.node.source.value, specifiers: [], line: lineOffset + (p.node.loc?.start.line || 1) });
         },
         CallExpression(p: any) {
+          const callee = p.node.callee;
+          if (callee?.type === 'MemberExpression' && callee.object?.type === 'MetaProperty'
+            && callee.object.meta?.name === 'import' && callee.object.property?.name === 'meta'
+            && ['glob', 'globEager'].includes(callee.property?.name)) {
+            const pattern = p.node.arguments[0];
+            const patterns = pattern?.type === 'ArrayExpression' ? pattern.elements : [pattern];
+            for (const item of patterns) if (item?.type === 'StringLiteral' && !item.value.startsWith('!')) {
+              imports.push({ source: item.value, specifiers: [], line: lineOffset + (p.node.loc?.start.line || 1), dynamic: true, glob: true });
+            }
+          }
+          if (callee?.type === 'MemberExpression' && callee.object?.name === 'require'
+            && callee.property?.name === 'context' && p.node.arguments[0]?.type === 'StringLiteral') {
+            const expression = p.node.arguments[2];
+            imports.push({ source: p.node.arguments[0].value, specifiers: [], line: lineOffset + (p.node.loc?.start.line || 1),
+              context: { recursive: p.node.arguments[1]?.value !== false,
+                pattern: expression?.type === 'RegExpLiteral' ? expression.pattern : undefined,
+                flags: expression?.type === 'RegExpLiteral' ? expression.flags : undefined } });
+          }
           if (p.node.callee?.type === 'Import' && p.node.arguments[0]?.type === 'StringLiteral') {
             imports.push({ source: p.node.arguments[0].value, specifiers: [], line: lineOffset + (p.node.loc?.start.line || 1), dynamic: true });
           } else if (p.node.callee?.name === 'require' && p.node.arguments[0]?.type === 'StringLiteral') {
@@ -149,6 +167,13 @@ export function detectVueFileEntities(fileContent: string, filePath: string): De
               message: 'Deep watch traverses nested reactive values; measure its cost during updates.',
               file: filePath, line, evidence: 'static',
             });
+          }
+        },
+        NewExpression(p: any) {
+          if (p.node.callee?.name === 'URL' && p.node.arguments[0]?.type === 'StringLiteral'
+            && p.node.arguments[1]?.type === 'MemberExpression'
+            && p.node.arguments[1].object?.type === 'MetaProperty') {
+            imports.push({ source: p.node.arguments[0].value, specifiers: [], line: lineOffset + (p.node.loc?.start.line || 1) });
           }
         },
         ExportDefaultDeclaration(p: any) {

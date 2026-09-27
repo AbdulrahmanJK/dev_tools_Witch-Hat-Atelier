@@ -12,11 +12,13 @@ export interface FrameworkDetection {
 interface PackageVersions {
   react?: string;
   vue?: string;
+  directory?: string;
 }
 
 export class FrameworkDetector {
   private readonly root: string;
   private readonly manifests = new Map<string, PackageVersions>();
+  private readonly contextByDirectory = new Map<string, PackageVersions>();
   private readonly installedVersions = new Map<string, string | undefined>();
 
   constructor(projectRoot: string) {
@@ -33,46 +35,49 @@ export class FrameworkDetector {
     );
 
     if (ext === '.vue' || importsVue) {
-      return { framework: 'vue', version: this.versionFor(filePath, 'vue', versions.vue), confidence: 'high' };
+      return { framework: 'vue', version: this.versionFor(filePath, 'vue', versions), confidence: 'high' };
     }
     if (importsReact) {
-      return { framework: 'react', version: this.versionFor(filePath, 'react', versions.react), confidence: 'high' };
+      return { framework: 'react', version: this.versionFor(filePath, 'react', versions), confidence: 'high' };
     }
     if (entities.hasJsx && versions.react && !versions.vue) {
-      return { framework: 'react', version: this.versionFor(filePath, 'react', versions.react), confidence: 'medium' };
+      return { framework: 'react', version: this.versionFor(filePath, 'react', versions), confidence: 'medium' };
     }
     if (entities.hasJsx && versions.vue && !versions.react) {
-      return { framework: 'vue', version: this.versionFor(filePath, 'vue', versions.vue), confidence: 'medium' };
+      return { framework: 'vue', version: this.versionFor(filePath, 'vue', versions), confidence: 'medium' };
     }
     if (entities.hasJsx && !versions.vue) {
-      return { framework: 'react', version: this.versionFor(filePath, 'react', versions.react), confidence: 'low' };
+      return { framework: 'react', version: this.versionFor(filePath, 'react', versions), confidence: 'low' };
     }
     return { framework: 'none', confidence: 'low' };
   }
 
-  private versionFor(filePath: string, framework: 'react' | 'vue', fallback?: string): string | undefined {
-    const key = path.dirname(filePath) + ':' + framework;
-    if (this.installedVersions.has(key)) return this.installedVersions.get(key) || fallback;
+  private versionFor(filePath: string, framework: 'react' | 'vue', versions: PackageVersions): string | undefined {
+    const directory = versions.directory || path.dirname(filePath);
+    const key = directory + ':' + framework;
+    if (this.installedVersions.has(key)) return this.installedVersions.get(key) || versions[framework];
     let version: string | undefined;
     try {
-      const manifest = createRequire(filePath).resolve(`${framework}/package.json`);
+      const manifest = createRequire(path.join(directory, 'package.json')).resolve(`${framework}/package.json`);
       version = JSON.parse(fs.readFileSync(manifest, 'utf8')).version;
     } catch { /* A declared version remains useful without node_modules. */ }
     this.installedVersions.set(key, version);
-    return version || fallback;
+    return version || versions[framework];
   }
 
   private nearestManifest(filePath: string): PackageVersions {
     let dir = path.dirname(path.resolve(filePath));
-    const result: PackageVersions = {};
+    const checked: string[] = [];
+    let result: PackageVersions = {};
     while (dir === this.root || dir.startsWith(`${this.root}${path.sep}`)) {
+      const saved = this.contextByDirectory.get(dir);
+      if (saved) { result = saved; break; }
+      checked.push(dir);
       const manifestPath = path.join(dir, 'package.json');
       if (fs.existsSync(manifestPath)) {
         const cached = this.manifests.get(manifestPath);
         if (cached) {
-          result.react ||= cached.react;
-          result.vue ||= cached.vue;
-          if (result.react && result.vue) return result;
+          if (cached.react || cached.vue) { result = { ...cached, directory: dir }; break; }
           if (dir === this.root) break;
           dir = path.dirname(dir);
           continue;
@@ -86,9 +91,7 @@ export class FrameworkDetector {
           const all = { ...json.peerDependencies, ...json.devDependencies, ...json.dependencies };
           const versions = { react: all.react, vue: all.vue };
           this.manifests.set(manifestPath, versions);
-          result.react ||= versions.react;
-          result.vue ||= versions.vue;
-          if (result.react && result.vue) return result;
+          if (versions.react || versions.vue) { result = { ...versions, directory: dir }; break; }
         } catch {
           // Keep searching parent manifests when a nested manifest cannot be read.
         }
@@ -96,6 +99,7 @@ export class FrameworkDetector {
       if (dir === this.root) break;
       dir = path.dirname(dir);
     }
+    for (const directory of checked) this.contextByDirectory.set(directory, result);
     return result;
   }
 }
