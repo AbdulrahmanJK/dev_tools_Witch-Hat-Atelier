@@ -84,7 +84,7 @@ node packages/cli/bin/wha-viewer.js /path/to/sample-project
 ```powershell
 pnpm.cmd install
 pnpm.cmd run build
-node packages/cli/bin/wha-viewer.js "C:/projects/sample-project"
+node packages/cli/bin/wha-viewer.js "C:\projects\sample-project"
 ```
 
 Для проектов с более чем 5000 исходными файлами автоматическое слежение за всем репозиторием отключается, чтобы не нагружать компьютер дополнительным обходом каталогов. В карточке статуса можно выбрать подпапку до 5000 исходников для слежения; остальные изменения подтягиваются кнопкой **Обновить карту**. Для меньших проектов работает автоматическая перезагрузка при изменении кода.

@@ -15,7 +15,7 @@
     "format": "prettier --write \"packages/**/*.{ts,tsx,css,json,md}\"",
     "test": "vitest run",
     "start": "node packages/cli/bin/wha-viewer.js",
-    "view:sample-project": "node packages/cli/bin/wha-viewer.js /path/to/sample-project"
+    "view:project": "node packages/cli/bin/wha-viewer.js"
   },
   "keywords": [
     "witch-hat-atelier",
