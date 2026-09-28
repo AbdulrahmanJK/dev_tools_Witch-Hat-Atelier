@@ -17,6 +17,3 @@ build
 !.dev.vars.example
 .env*
 !.env.example
-
-# Local screenshots may contain private project information
-/docs/images/
